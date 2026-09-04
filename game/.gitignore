@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+out/
+cmake-build-*/
+.cache/
+.vs/
+.vscode/
+
+# Compile DB (regenerated)
+compile_commands.json
+
+# IDE
+*.user
+*.suo
+*.sln
+*.vcxproj*
+CMakeSettings.json
+
+# vcpkg
+vcpkg_installed/
+
+# OS
+Thumbs.db
+.DS_Store

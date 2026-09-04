@@ -1,0 +1,29 @@
+# Build output
+game/build/
+build/
+
+# Old release binaries
+versions/
+
+# Screenshots / test artifacts
+*.bmp
+game/shot/
+game/save/
+game/minekampf.log
+game/probe*.log
+game/test_region_*.mca*
+game/perf_bench_game.log
+
+# Local tool configs
+opencode.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local agent tooling
+.zcode/
+.agents/
+performance_test.png
+performance_test.bmp
+game/shot

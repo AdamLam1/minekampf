@@ -1,0 +1,15 @@
+[
+  {
+    "type": "shaped",
+    "output": "stick",
+    "count": 9,
+    "pattern": ["X", "X"],
+    "ingredients": {"X": "oak_planks"}
+  },
+  {
+    "type": "shapeless",
+    "output": "glass",
+    "count": 2,
+    "items": ["sand", "coal"]
+  }
+]

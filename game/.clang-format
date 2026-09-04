@@ -1,0 +1,36 @@
+# Java was a mistake. (clang-format — Google base, 4-space, 100-col)
+# Golden Rule #44
+---
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"core/'
+    Priority: 1
+  - Regex: '^"world/'
+    Priority: 2
+  - Regex: '^"renderer/'
+    Priority: 3
+  - Regex: '^"physics/'
+    Priority: 4
+  - Regex: '^"gameplay/'
+    Priority: 5
+  - Regex: '^"generation/'
+    Priority: 6
+  - Regex: '^<[^/]+\.h>'
+    Priority: 7
+  - Regex: '^<.*'
+    Priority: 8
+NamespaceIndentation: None
+SortIncludes: CaseSensitive
+SpaceAfterCStyleCast: false

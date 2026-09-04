@@ -1,0 +1,10 @@
+# Minekampf — voxel sandbox game.
+# Pin all dependency versions. vcpkg is secondary to
+# FetchContent; this manifest documents system-level deps if a vcpkg
+# toolchain is used. Currently all deps are pulled via FetchContent.
+{
+    "name": "minekampf",
+    "version-string": "1.0.0",
+    "dependencies": [],
+    "builtin-baseline": "0000000000000000000000000000000000000000"
+}

@@ -1,0 +1,40 @@
+{
+  "quests": [
+    {
+      "id": 2,
+      "title": "Zelazna przysluga",
+      "description": "Przynies 5 rud zelaza.\nNagroda: 25 XP i 2 jablka.",
+      "type": "collect",
+      "item": "iron_ore",
+      "count": 5,
+      "xp": 25,
+      "rewards": [
+        {"item": "apple", "count": 2}
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Lowca szkieletow",
+      "description": "Zabij 3 szkielety.\nNagroda: 40 XP i 12 strzal.",
+      "type": "kill",
+      "mob": "skeleton",
+      "count": 3,
+      "xp": 40,
+      "rewards": [
+        {"item": "arrow", "count": 12}
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Wiejski dostawca",
+      "description": "Przynies 8 debkowych desek.\nNagroda: 10 XP i 1 wegiel.",
+      "type": "collect",
+      "item": "oak_planks",
+      "count": 8,
+      "xp": 10,
+      "rewards": [
+        {"item": "coal", "count": 1}
+      ]
+    }
+  ]
+}

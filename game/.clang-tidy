@@ -1,0 +1,22 @@
+# Static analysis rules — Golden Rule #45
+# Enforces modern, performant, bug-free, readable C++.
+---
+Checks: >
+  -*,
+  modernize-*,
+  performance-*,
+  bugprone-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters,
+  -readability-function-cognitive-complexity
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*/src/.*\.hpp$'
+FormatStyle: file
+CheckOptions:
+  - key:   readability-function-cognitive-complexity.Threshold
+    value: '40'
+  - key:   modernize-use-default-member-init.UseAssignment
+    value: '1'

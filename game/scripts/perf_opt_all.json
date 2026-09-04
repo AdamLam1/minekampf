@@ -1,0 +1,127 @@
+{
+  "label": "opt-all-7",
+  "load_to_playing_s": 0.51,
+  "idle": {
+    "mspt": {
+      "n": 12,
+      "avg": 0.167,
+      "p50": 0.13,
+      "p95": 0.531,
+      "max": 0.531
+    },
+    "perf": {
+      "mspt": 0.121671,
+      "tick": 184,
+      "sections_us": {
+        "SchedTick": 6,
+        "RandTick": 672,
+        "EntTick": 10,
+        "MobSpawn": 3,
+        "ChunkMgmt": 25,
+        "Fluids": 45,
+        "TotalTick": 96
+      },
+      "chunks": 317,
+      "dirty": 66,
+      "gen_in_flight": 0,
+      "mesh_in_flight": 0,
+      "mobs": 0,
+      "particles": 0,
+      "light_computes": 0,
+      "light_total_ms": 0
+    }
+  },
+  "edits": {
+    "edits_sent": 140,
+    "mspt": {
+      "n": 4,
+      "avg": 0.286,
+      "p50": 0.343,
+      "p95": 0.476,
+      "max": 0.476
+    },
+    "perf": {
+      "mspt": 0.129169,
+      "tick": 382,
+      "sections_us": {
+        "SchedTick": 4,
+        "RandTick": 678,
+        "EntTick": 8,
+        "MobSpawn": 3,
+        "ChunkMgmt": 30,
+        "Fluids": 17,
+        "TotalTick": 50
+      },
+      "chunks": 317,
+      "dirty": 66,
+      "gen_in_flight": 0,
+      "mesh_in_flight": 0,
+      "mobs": 0,
+      "particles": 0,
+      "light_computes": 134,
+      "light_total_ms": 255.785
+    }
+  },
+  "teleport": {
+    "mspt": {
+      "n": 32,
+      "avg": 0.118,
+      "p50": 0.095,
+      "p95": 0.249,
+      "max": 0.345
+    },
+    "perf": {
+      "mspt": 0.0829291,
+      "tick": 568,
+      "sections_us": {
+        "SchedTick": 5,
+        "RandTick": 394,
+        "EntTick": 11,
+        "MobSpawn": 3,
+        "ChunkMgmt": 16,
+        "Fluids": 28,
+        "TotalTick": 70
+      },
+      "chunks": 168,
+      "dirty": 20,
+      "gen_in_flight": 0,
+      "mesh_in_flight": 0,
+      "mobs": 0,
+      "particles": 0,
+      "light_computes": 137,
+      "light_total_ms": 261.14
+    },
+    "settle_s": 10.312909603118896
+  },
+  "mobs": {
+    "mspt": {
+      "n": 12,
+      "avg": 0.058,
+      "p50": 0.062,
+      "p95": 0.071,
+      "max": 0.071
+    },
+    "perf": {
+      "mspt": 0.0491154,
+      "tick": 778,
+      "sections_us": {
+        "SchedTick": 3,
+        "RandTick": 360,
+        "EntTick": 8,
+        "MobSpawn": 3,
+        "ChunkMgmt": 18,
+        "Fluids": 20,
+        "TotalTick": 36
+      },
+      "chunks": 168,
+      "dirty": 20,
+      "gen_in_flight": 0,
+      "mesh_in_flight": 0,
+      "mobs": 0,
+      "particles": 0,
+      "light_computes": 0,
+      "light_total_ms": 0
+    }
+  },
+  "ts": "2026-09-02 23:48:54"
+}
