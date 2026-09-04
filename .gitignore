@@ -21,9 +21,6 @@ opencode.json
 Thumbs.db
 .DS_Store
 
-# Local agent tooling
-.zcode/
-.agents/
 performance_test.png
 performance_test.bmp
 game/shot
