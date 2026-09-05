@@ -1,5 +1,6 @@
 #include "generation/world_generator.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "core/config.hpp"
@@ -29,8 +30,10 @@ int WorldGenerator::terrain_height(int world_x, int world_z, Biome& out_biome) c
     double rg = ridges_.fbm2(world_x * 0.005, world_z * 0.005, 4);
     double ridges_f = std::abs(rg); // 0..1 mountain ridges
 
-    double temp = temperature_.fbm2(world_x * 0.0015, world_z * 0.0015, 4) * 0.5 + 0.5; // 0..1
-    double hum = humidity_.fbm2(world_x * 0.0015 + 100.0, world_z * 0.0015 + 100.0, 4) * 0.5 + 0.5;
+    // Biome noise at ~330-block wavelength: biomes change within render
+    // distance instead of every few thousand blocks.
+    double temp = temperature_.fbm2(world_x * 0.003, world_z * 0.003, 4) * 0.5 + 0.5; // 0..1
+    double hum = humidity_.fbm2(world_x * 0.003 + 100.0, world_z * 0.003 + 100.0, 4) * 0.5 + 0.5;
 
     out_biome = select_biome(static_cast<float>(temp * 2.0), static_cast<float>(hum),
                              static_cast<float>(cont), static_cast<float>(ridges_f));
@@ -42,7 +45,30 @@ int WorldGenerator::terrain_height(int world_x, int world_z, Biome& out_biome) c
     int h = static_cast<int>(std::round(SEA_LEVEL + continent_height + mountain_height + roughness));
     if (h < BEDROCK_FLOOR + 1) h = BEDROCK_FLOOR + 1;
     if (h > MAX_Y - 2) h = MAX_Y - 2;
+
+    // Rivers: where the river-noise ridgeline is narrow, cut a channel to
+    // just below sea level (deeper in the center) and blend the banks. The
+    // carve runs through terrain_height so structures/features agree.
+    double river = river_mask(world_x, world_z);
+    if (river > 0.0 && h > SEA_LEVEL - 5) {
+        double depth = river * 5.0;                       // 0..5 blocks
+        int target = SEA_LEVEL - 1 - static_cast<int>(depth);
+        h = std::min(h, target + static_cast<int>((h - target) * (1.0 - river)));
+        if (h < BEDROCK_FLOOR + 1) h = BEDROCK_FLOOR + 1;
+    }
     return h;
+}
+
+bool WorldGenerator::is_frozen(int world_x, int world_z) const {
+    return temperature_.fbm2(world_x * 0.003, world_z * 0.003, 4) * 0.5 + 0.5 < 0.35;
+}
+
+double WorldGenerator::river_mask(int world_x, int world_z) const {
+    double rv = std::abs(river_.fbm2(world_x * 0.0022, world_z * 0.0022, 3));
+    const double kHalfWidth = 0.05;
+    if (rv >= kHalfWidth) return 0.0;
+    double t = 1.0 - rv / kHalfWidth; // 0 at bank, 1 at center
+    return t * t;                     // smooth channel profile
 }
 
 bool WorldGenerator::is_cave(int world_x, int world_y, int world_z, int terrain_top) const {
@@ -93,6 +119,7 @@ void WorldGenerator::generate_terrain(Chunk& chunk, TerrainColumnCache& cache) c
                 Biome biome = Biome::Plains;
                 cache.tops[lz * CHUNK_SIZE + lx] = terrain_height(wx, wz, biome);
                 cache.biomes[lz * CHUNK_SIZE + lx] = biome;
+                chunk.biomes[lz * CHUNK_SIZE + lx] = static_cast<uint8_t>(biome);
             }
         }
     }
@@ -162,15 +189,35 @@ void WorldGenerator::generate_terrain(Chunk& chunk, TerrainColumnCache& cache) c
 
                     if (y <= BEDROCK_FLOOR) {
                         block = BLOCK_BEDROCK;
+                    } else if (y <= BEDROCK_FLOOR + 3) {
+                        // Jagged bedrock: deterministic 1-4 layer floor.
+                        uint64_t bh = seed_ ^
+                                      (static_cast<uint64_t>(wx) * 0x9E3779B97F4A7C15ULL) ^
+                                      (static_cast<uint64_t>(wz) * 0xC2B2AE3D27D4EB4FULL) ^
+                                      (static_cast<uint64_t>(y) * 0x165667B19E3779F9ULL);
+                        bh ^= bh >> 32;
+                        if (y <= BEDROCK_FLOOR + static_cast<int>(bh % 4))
+                            block = BLOCK_BEDROCK;
                     } else if (y > terrain_top) {
-                        if (y <= SEA_LEVEL) block = BLOCK_WATER; // oceans / lakes
+                        if (y <= SEA_LEVEL) {
+                            // Exposed water freezes in cold regions.
+                            block = (y == SEA_LEVEL && is_frozen(wx, wz))
+                                        ? BLOCK_ICE : BLOCK_WATER;
+                        }
                     } else {
                         // Solid column region: apply caves first.
                         if (is_cave(wx, y, wz, terrain_top)) {
-                            if (y <= SEA_LEVEL) block = BLOCK_WATER;
+                            // Deep caves flood with lava; above the lava line
+                            // they stay air-filled (the old blanket water made
+                            // every cave an underwater maze).
+                            if (y <= 12) block = BLOCK_LAVA;
                         } else if (y == terrain_top) {
+                            // Snow-capped mountain peaks.
+                            if (biome_info(cache.biomes[lz * CHUNK_SIZE + lx]).surface == BLOCK_STONE &&
+                                terrain_top >= SEA_LEVEL + 14) {
+                                block = BLOCK_SNOW;
+                            } else if (terrain_top < SEA_LEVEL) {
                             // Surface block.
-                            if (terrain_top < SEA_LEVEL) {
                                 block = bi.underwater; // underwater floor
                             } else if (terrain_top <= SEA_LEVEL + 1) {
                                 block = BLOCK_SAND; // beach fringe
@@ -268,6 +315,41 @@ void WorldGenerator::place_tree(Chunk& chunk, int tx, int tz, int surface_y, Bio
     }
 }
 
+void WorldGenerator::place_acacia(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const {
+    if (surface_y <= SEA_LEVEL) return;
+    if (surface_y + 9 >= MAX_Y) return;
+
+    int height = 4 + rng.next_int(2);
+    int top = surface_y + height;
+
+    int base_x = chunk.pos.x * CHUNK_SIZE;
+    int base_z = chunk.pos.z * CHUNK_SIZE;
+    auto place = [&](int wx, int wy, int wz, BlockId b, bool only_air) {
+        if (wx >= base_x && wx < base_x + CHUNK_SIZE && wz >= base_z && wz < base_z + CHUNK_SIZE) {
+            int lx = wx - base_x;
+            int lz = wz - base_z;
+            if (!only_air || chunk.get_block(lx, wy, lz) == BLOCK_AIR) {
+                chunk.set_block(lx, wy, lz, b);
+            }
+        }
+    };
+
+    for (int y = surface_y + 1; y <= top; ++y) place(tx, y, tz, BLOCK_ACACIA_LOG, false);
+    // Flat, wide canopy: 5x5 skirt, 3x3 cap, single top block.
+    for (int dz = -2; dz <= 2; ++dz) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            if (std::abs(dx) == 2 && std::abs(dz) == 2 && rng.next_int(2) == 0) continue;
+            place(tx + dx, top, tz + dz, BLOCK_ACACIA_LEAVES, true);
+        }
+    }
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            place(tx + dx, top + 1, tz + dz, BLOCK_ACACIA_LEAVES, true);
+        }
+    }
+    place(tx, top + 2, tz, BLOCK_ACACIA_LEAVES, true);
+}
+
 void WorldGenerator::generate_features(Chunk& chunk, const TerrainColumnCache& cache) const {
     if (dimension_ != DimensionId::Overworld) return;
 
@@ -296,9 +378,20 @@ void WorldGenerator::generate_features(Chunk& chunk, const TerrainColumnCache& c
             uint64_t pos_hash = seed_ ^ 0x31415926535ULL ^ (static_cast<uint64_t>(tx) * 0x1234567ULL) ^ (static_cast<uint64_t>(tz) * 0x89ABCDEFULL);
             Rng tree_rng(pos_hash);
 
-            int r = tree_rng.next_int(bi.min_tree_chance);
+            // Forests come in noise-driven groves (dense patches and clearings
+            // instead of uniform scatter); other biomes use the base chance.
+            int chance = bi.min_tree_chance;
+            if (biome == Biome::Forest) {
+                double grove = tree_.fbm2(tx * 0.012, tz * 0.012, 2);
+                chance = std::clamp(static_cast<int>(chance * (1.3 - grove)), 3, 24);
+            }
+            int r = tree_rng.next_int(chance);
             if (r == 0) {
-                place_tree(chunk, tx, tz, top, biome, tree_rng);
+                if (biome == Biome::Savanna) {
+                    place_acacia(chunk, tx, tz, top, tree_rng);
+                } else {
+                    place_tree(chunk, tx, tz, top, biome, tree_rng);
+                }
             } else {
                 // Feature generation: vegetation, flowers and cacti.
                 if (tx >= base_x && tx < base_x + CHUNK_SIZE && tz >= base_z && tz < base_z + CHUNK_SIZE) {

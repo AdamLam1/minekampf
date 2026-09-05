@@ -89,11 +89,13 @@ inline constexpr float UNBREAKABLE = -1.0f;
         case BLOCK_OAK_LOG:
         case BLOCK_SPRUCE_LOG:
         case BLOCK_BIRCH_LOG:
+        case BLOCK_ACACIA_LOG:
         case BLOCK_CACTUS:
             return 1.4f;
         case BLOCK_OAK_LEAVES:
         case BLOCK_SPRUCE_LEAVES:
         case BLOCK_BIRCH_LEAVES:
+        case BLOCK_ACACIA_LEAVES:
             return 0.2f;
         case BLOCK_GLASS:
             return 0.3f;
@@ -165,6 +167,7 @@ inline constexpr float UNBREAKABLE = -1.0f;
         case BLOCK_OAK_LOG:
         case BLOCK_SPRUCE_LOG:
         case BLOCK_BIRCH_LOG:
+        case BLOCK_ACACIA_LOG:
         case BLOCK_CRAFTING_TABLE:
             return ToolClass::Axe;
         case BLOCK_FURNACE:
@@ -378,7 +381,8 @@ struct Drop {
         case BLOCK_GRASS: return Drop{ITEM_DIRT, 1, 1};
         case BLOCK_OAK_LEAVES: return Drop{ITEM_APPLE, 0, 1}; // chance-resolved below
         case BLOCK_SPRUCE_LEAVES:
-        case BLOCK_BIRCH_LEAVES: return Drop{ITEM_STICK, 0, 1};
+        case BLOCK_BIRCH_LEAVES:
+        case BLOCK_ACACIA_LEAVES: return Drop{ITEM_STICK, 0, 1};
         case BLOCK_GRAVEL: return Drop{BLOCK_GRAVEL, 1, 1};
         case BLOCK_SNOW: return Drop{BLOCK_SNOW, 1, 1};
         case BLOCK_CRAFTING_TABLE:
@@ -387,6 +391,7 @@ struct Drop {
         case BLOCK_OAK_LOG:
         case BLOCK_SPRUCE_LOG:
         case BLOCK_BIRCH_LOG:
+        case BLOCK_ACACIA_LOG:
         case BLOCK_SAND:
         case BLOCK_DIRT:
         case BLOCK_CLAY:

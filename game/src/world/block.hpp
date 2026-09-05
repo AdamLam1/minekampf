@@ -106,8 +106,10 @@ inline constexpr BlockId BLOCK_REDSTONE_LAMP_OFF = 80;
 inline constexpr BlockId BLOCK_REDSTONE_LAMP_ON = 81;
 inline constexpr BlockId BLOCK_REPEATER_OFF = 82;
 inline constexpr BlockId BLOCK_REPEATER_ON = 83;
+inline constexpr BlockId BLOCK_ACACIA_LOG = 84;
+inline constexpr BlockId BLOCK_ACACIA_LEAVES = 85;
 
-inline constexpr BlockId BLOCK_COUNT = 84;
+inline constexpr BlockId BLOCK_COUNT = 86;
 
 [[nodiscard]] inline constexpr bool is_lever(BlockId b) {
     return b == BLOCK_LEVER_OFF || b == BLOCK_LEVER_ON;
@@ -215,7 +217,10 @@ enum class Tile : uint16_t {
     DestroyStage7 = 67,
     DestroyStage8 = 68,
     DestroyStage9 = 69,
-    Count = 70,
+    AcaciaLogSide = 70,
+    AcaciaLogTop = 71,
+    AcaciaLeaves = 72,
+    Count = 73,
 };
 
 // Stable tile names (texture overrides in assets/textures/<name>.png, debug
@@ -234,7 +239,7 @@ inline constexpr std::array<std::string_view, static_cast<size_t>(Tile::Count)> 
     "FurnaceFront", "FurnaceFrontLit", "QuestNpc", "DestroyStage0",
     "DestroyStage1", "DestroyStage2", "DestroyStage3", "DestroyStage4",
     "DestroyStage5", "DestroyStage6", "DestroyStage7", "DestroyStage8",
-    "DestroyStage9",
+    "DestroyStage9", "AcaciaLogSide", "AcaciaLogTop", "AcaciaLeaves",
 };
 
 // Static properties of a block type. Looked up by id from a fixed table.
@@ -288,6 +293,8 @@ inline constexpr std::array<BlockProperties, BLOCK_COUNT> BLOCK_PROPERTIES_TABLE
     {"obsidian",     true,  true,  false, false, true,  0,  1, 0.6f,  Tile::Obsidian,        Tile::Obsidian,        Tile::Obsidian},
     {"spruce_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::LogTop,          Tile::LogTop,          Tile::LogSide},
     {"spruce_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::Leaves,          Tile::Leaves,          Tile::Leaves},
+    {"acacia_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::AcaciaLogTop,    Tile::AcaciaLogTop,    Tile::AcaciaLogSide},
+    {"acacia_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::AcaciaLeaves,    Tile::AcaciaLeaves,    Tile::AcaciaLeaves},
     {"birch_log",    true,  true,  false, false, true,  0,  1, 0.6f,  Tile::LogTop,          Tile::LogTop,          Tile::LogSide},
     {"birch_leaves", true,  false, true,  false, false, 0,  1, 0.6f,  Tile::Leaves,          Tile::Leaves,          Tile::Leaves},
     {"tall_grass",   false, false, true,  false, false, 0,  0, 0.6f,  Tile::TallGrass,       Tile::TallGrass,       Tile::TallGrass},

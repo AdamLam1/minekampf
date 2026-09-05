@@ -32,6 +32,7 @@ public:
           cave_(seed + 5),
           ore_(seed + 6),
           tree_(seed + 7),
+          river_(seed + 8),
           structures_(seed) {}
 
     // Fill `chunk` with terrain + features. Sets status to Full and marks
@@ -42,6 +43,12 @@ public:
     
     // Calculates terrain height and biome
     [[nodiscard]] int terrain_height(int world_x, int world_z, Biome& out_biome) const;
+
+    // 0..1 river intensity at a column (>= 0.5 means carved channel).
+    [[nodiscard]] double river_mask(int world_x, int world_z) const;
+
+    // Cold enough at this column for exposed water to freeze.
+    [[nodiscard]] bool is_frozen(int world_x, int world_z) const;
 
     [[nodiscard]] uint64_t seed() const { return seed_; }
 
@@ -59,6 +66,7 @@ private:
     [[nodiscard]] bool is_cave(int world_x, int world_y, int world_z, int terrain_top) const;
     [[nodiscard]] BlockId ore_at(int world_x, int world_y, int world_z, int terrain_top) const;
     void place_tree(Chunk& chunk, int tx, int tz, int surface_y, Biome biome, Rng& rng) const;
+    void place_acacia(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const;
 
     uint64_t seed_;
     PerlinNoise continentalness_;
@@ -69,6 +77,7 @@ private:
     PerlinNoise cave_;
     PerlinNoise ore_;
     PerlinNoise tree_;
+    PerlinNoise river_;
     
     StructureGenerator structures_{0};
 };

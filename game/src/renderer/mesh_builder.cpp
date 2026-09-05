@@ -192,7 +192,7 @@ void emit_quad(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, const Fac
 
         float u = c.u;
         float v = c.v;
-        if (tile == Tile::Leaves) {
+        if (tile == Tile::Leaves || tile == Tile::AcaciaLeaves) {
             int hash = (p.x * 73856093) ^ (p.y * 19349663) ^ (p.z * 83492791);
             int rot = (hash >> 8) & 3;
             if (rot == 1) { u = 1.0f - c.v; v = c.u; }

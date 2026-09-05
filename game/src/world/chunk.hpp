@@ -6,6 +6,7 @@
 
 #include "core/config.hpp"
 #include "core/types.hpp"
+#include "generation/biomes.hpp"
 #include "world/block.hpp"
 #include "world/paletted_container.hpp"
 
@@ -59,6 +60,13 @@ struct Chunk {
     std::array<PalettedContainer, SECTIONS_PER_CHUNK> sections;
     std::array<LightData, SECTIONS_PER_CHUNK> light;
     std::array<int, CHUNK_SIZE * CHUNK_SIZE> heightmap{}; // highest non-air Y per column
+    // Biome id (Biome enum) per column, filled by the generator. Only the
+    // Overworld stores real biomes; other dimensions leave zeros (Ocean).
+    std::array<uint8_t, CHUNK_SIZE * CHUNK_SIZE> biomes{};
+
+    [[nodiscard]] Biome biome_at(int lx, int lz) const {
+        return static_cast<Biome>(biomes[lz * CHUNK_SIZE + lx]);
+    }
     std::atomic<ChunkStatus> status{ChunkStatus::Empty};
     std::atomic<bool> dirty{true};          // mesh needs rebuild
     std::atomic<bool> light_dirty{true};    // light needs recompute

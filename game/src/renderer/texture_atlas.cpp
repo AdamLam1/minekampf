@@ -236,6 +236,48 @@ void TextureAtlas::generate() {
         }
     }
 
+    // 4b. Acacia log + leaves: gray-brown bark, orange growth rings, olive
+    // canopy (distinct from oak so savannas read differently).
+    {
+        int side = static_cast<int>(Tile::AcaciaLogSide);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, side);
+                bool groove = (px % 5 == (s % 3));
+                int v = (s % 18) - 9;
+                if (groove) {
+                    put_pixel(side, px, py, static_cast<uint8_t>(84 + v), static_cast<uint8_t>(78 + v), static_cast<uint8_t>(70 + v), 255);
+                } else {
+                    put_pixel(side, px, py, static_cast<uint8_t>(118 + v), static_cast<uint8_t>(110 + v), static_cast<uint8_t>(100 + v), 255);
+                }
+                put_height_pixel(side, px, py, groove ? 90 : 140);
+            }
+        }
+        int top = static_cast<int>(Tile::AcaciaLogTop);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int dx = px - 8, dy = py - 8;
+                int ring = static_cast<int>(std::sqrt(dx * dx + dy * dy)) % 3;
+                int v = (hash_shade(px, py, top) % 12) - 6;
+                uint8_t r = static_cast<uint8_t>(178 + ring * 14 + v);
+                uint8_t g = static_cast<uint8_t>(116 + ring * 9 + v);
+                uint8_t b = static_cast<uint8_t>(66 + ring * 5 + v);
+                put_pixel(top, px, py, r, g, b, 255);
+                put_height_pixel(top, px, py, static_cast<uint8_t>(150 - ring * 8));
+            }
+        }
+        int lv = static_cast<int>(Tile::AcaciaLeaves);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, lv) % 100;
+                uint8_t r = static_cast<uint8_t>(88 + (s % 16));
+                uint8_t g = static_cast<uint8_t>(118 + (s % 24));
+                uint8_t b = static_cast<uint8_t>(40 + (s % 12));
+                put_pixel(lv, px, py, r, g, b, 255);
+            }
+        }
+    }
+
     // 5. Stylized Ores — slate base with shaped crystal veins (seeded blobs
     // grown over a noise-perturbed distance field, not scatter noise).
     auto ore = [&](Tile t, RGB core, RGB highlight, uint8_t metalness) {
