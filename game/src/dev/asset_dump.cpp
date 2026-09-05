@@ -23,6 +23,7 @@
 #include "renderer/texture_atlas.hpp"
 #include "renderer/item_icons.hpp"
 #include "renderer/geo_model.hpp"
+#include "gameplay/entity.hpp"
 #include "renderer/mob_rig.hpp"
 #include "world/block.hpp"
 
@@ -34,19 +35,36 @@ namespace {
 // and texture layout can be reviewed without launching the game.
 void render_model_preview(const char* name, const std::string& out_dir) {
     namespace fs = std::filesystem;
-    fs::path base = fs::path("assets/models/mobs") / (std::string(name) + ".geo.json");
+    fs::path dir = fs::path("assets/models/mobs");
     std::string err;
-    auto model = mc::GeoModel::load_from_file(base.string(), &err);
+    std::string model_kind;
+    std::unique_ptr<mc::GeoModel> model;
+    for (const char* ext : {".geo.json", ".bbmodel"}) {
+        fs::path candidate = dir / (std::string(name) + ext);
+        std::error_code ec;
+        if (!fs::exists(candidate, ec)) continue;
+        model = mc::GeoModel::load_from_file(candidate.string(), &err);
+        model_kind = ext;
+        break;
+    }
     if (!model) {
-        std::printf("model %s: LOAD FAILED: %s\n", name, err.c_str());
+        std::printf("model %s: LOAD FAILED: %s\n", name,
+                    err.empty() ? "no .geo.json or .bbmodel found" : err.c_str());
         return;
     }
-    // Load texture via texkit-generated PNG (tiny BMP-less stb use).
+    // Texture: sidecar PNG wins, else the texture embedded in the .bbmodel.
     int tw = 0, th = 0, comp = 0;
-    std::string tex_path = base.string().substr(0, base.string().size() - strlen(".geo.json")) + ".png";
-    stbi_uc* tex = stbi_load(tex_path.c_str(), &tw, &th, &comp, 4);
+    fs::path tex_candidate = dir / (std::string(name) + ".png");
+    std::error_code tex_ec;
+    stbi_uc* tex = nullptr;
+    if (fs::exists(tex_candidate, tex_ec))
+        tex = stbi_load(tex_candidate.string().c_str(), &tw, &th, &comp, 4);
+    if (!tex && !model->embedded_png.empty())
+        tex = stbi_load_from_memory(model->embedded_png.data(),
+                                    static_cast<int>(model->embedded_png.size()),
+                                    &tw, &th, &comp, 4);
     if (!tex) {
-        std::printf("model %s: texture missing %s\n", name, tex_path.c_str());
+        std::printf("model %s: texture missing (%s)\n", name, model_kind.c_str());
         return;
     }
 
@@ -73,9 +91,17 @@ void render_model_preview(const char* name, const std::string& out_dir) {
         for (size_t i = 0; i < model->bones.size(); ++i) {
             const auto& bone = model->bones[i];
             glm::mat4 parent = bone.parent >= 0 ? mats[bone.parent] : root;
-            glm::mat4 m = glm::translate(parent, bone.pivot * (1.0f / 16.0f));
-            if (bone.base_rot_x != 0.0f)
-                m = glm::rotate(m, bone.base_rot_x, glm::vec3(1, 0, 0));
+            // Bedrock pivots are absolute: translate by the difference to
+            // the parent's pivot, not by the full pivot again.
+            glm::vec3 base = bone.pivot;
+            if (bone.parent >= 0) base -= model->bones[bone.parent].pivot;
+            glm::mat4 m = glm::translate(parent, base * (1.0f / 16.0f));
+            if (bone.base_rot_deg.x != 0.0f)
+                m = glm::rotate(m, glm::radians(bone.base_rot_deg.x), glm::vec3(1, 0, 0));
+            if (bone.base_rot_deg.y != 0.0f)
+                m = glm::rotate(m, glm::radians(bone.base_rot_deg.y), glm::vec3(0, 1, 0));
+            if (bone.base_rot_deg.z != 0.0f)
+                m = glm::rotate(m, glm::radians(bone.base_rot_deg.z), glm::vec3(0, 0, 1));
             mats[i] = m;
         }
     }
@@ -86,14 +112,35 @@ void render_model_preview(const char* name, const std::string& out_dir) {
         const auto& bone = model->bones[i];
         for (const auto& cube : bone.cubes) {
             glm::vec3 center = cube.origin + cube.size * 0.5f - bone.pivot;
-            glm::mat4 t = glm::scale(glm::translate(mats[i], center * (1.0f / 16.0f)),
-                                     cube.size * (1.0f / 16.0f));
-            float u0 = cube.uv.x, v0 = cube.uv.y;
+            glm::mat4 t;
+            if (cube.rotated) {
+                glm::vec3 pivot_rel = cube.rot_pivot - bone.pivot;
+                t = glm::translate(mats[i], pivot_rel * (1.0f / 16.0f));
+                t = glm::rotate(t, glm::radians(cube.rot_deg.x), glm::vec3(1, 0, 0));
+                t = glm::rotate(t, glm::radians(cube.rot_deg.y), glm::vec3(0, 1, 0));
+                t = glm::rotate(t, glm::radians(cube.rot_deg.z), glm::vec3(0, 0, 1));
+                t = glm::translate(t, (center - pivot_rel) * (1.0f / 16.0f));
+            } else {
+                t = glm::translate(mats[i], center * (1.0f / 16.0f));
+            }
+            t = glm::scale(t, cube.size * (1.0f / 16.0f));
             float w = std::abs(cube.size.x), h = std::abs(cube.size.y), d = std::abs(cube.size.z);
-            glm::vec2 uv_south{u0 + d + w, v0 + d}, uv_north{u0 + d, v0 + d};
-            glm::vec2 uv_down{u0 + d + w, v0}, uv_up{u0 + d, v0};
-            glm::vec2 uv_west{u0 + d + w + d, v0 + d}, uv_east{u0, v0 + d};
-            glm::vec2 uvs[6] = {uv_south, uv_north, uv_down, uv_up, uv_west, uv_east};
+            glm::vec2 uvs[6];
+            glm::vec2 uv_dims[6];
+            if (cube.per_face) {
+                for (int f = 0; f < 6; ++f) {
+                    uvs[f] = {cube.faces[f].u, cube.faces[f].v};
+                    uv_dims[f] = {cube.faces[f].w, cube.faces[f].h};
+                }
+            } else {
+                float u0 = cube.uv.x, v0 = cube.uv.y;
+                uvs[0] = {u0 + d + w, v0 + d}; uv_dims[0] = {w, h};
+                uvs[1] = {u0 + d, v0 + d};     uv_dims[1] = {w, h};
+                uvs[2] = {u0 + d + w, v0};     uv_dims[2] = {w, d};
+                uvs[3] = {u0 + d, v0};         uv_dims[3] = {w, d};
+                uvs[4] = {u0 + d + w + d, v0 + d}; uv_dims[4] = {d, h};
+                uvs[5] = {u0, v0 + d};         uv_dims[5] = {d, h};
+            }
             const glm::vec3 corners[8] = {
                 {-0.5f,-0.5f,-0.5f},{0.5f,-0.5f,-0.5f},{0.5f,0.5f,-0.5f},{-0.5f,0.5f,-0.5f},
                 {-0.5f,-0.5f,0.5f},{0.5f,-0.5f,0.5f},{0.5f,0.5f,0.5f},{-0.5f,0.5f,0.5f}};
@@ -109,8 +156,8 @@ void render_model_preview(const char* name, const std::string& out_dir) {
                 }
                 uint8_t sh = static_cast<uint8_t>(150 + f * 18);
                 tris.push_back({quad[0], quad[1], quad[2], quad[3], depth, sh, sh, sh,
-                                uv.x / tw, uv.y / th, (uv.x + (f < 2 ? w : (f < 4 ? w : d))) / tw,
-                                (uv.y + (f < 2 || f >= 4 ? h : d)) / th});
+                                uv.x / tw, uv.y / th, (uv.x + uv_dims[f].x) / tw,
+                                (uv.y + uv_dims[f].y) / th});
             }
         }
     }
@@ -312,9 +359,16 @@ int main(int argc, char** argv) {
             std::printf("cell %d coverage %d/%d\n", cell, cov, ipx * ipx);
     }
 
-    // Blockbench model previews (posed + box-UV software render).
-    for (const char* sp : {"zombie", "skeleton", "cow", "pig"}) {
-        render_model_preview(sp, out_dir);
+    // Blockbench model previews (posed + box-UV software render), covering
+    // the built-ins plus every custom species found in assets/models/mobs.
+    mc::MobRegistry::instance().scan_directory("assets/models/mobs");
+    std::vector<std::string> species;
+    for (size_t i = 0; i < mc::MobRegistry::instance().size(); ++i) {
+        if (const mc::MobSpec* s = mc::MobRegistry::instance().by_id(static_cast<uint8_t>(i)))
+            species.push_back(s->name);
+    }
+    for (const std::string& sp : species) {
+        render_model_preview(sp.c_str(), out_dir);
     }
 
     std::printf("%s: %d tiles + icon atlas -> sheets in %s\n", ok ? "OK" : "FAILED", layers,

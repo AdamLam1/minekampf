@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
@@ -36,6 +37,33 @@ void box_uv_rects(const GeoCube& c, float tex_w, float tex_h, MobRenderer::UvRec
     out[5] = {u0 * iw, (v0 + d) * ih, d * iw, h * ih};               // east
 }
 
+void per_face_rects(const GeoCube& c, float tex_w, float tex_h, MobRenderer::UvRect out[6]) {
+    float iw = 1.0f / tex_w, ih = 1.0f / tex_h;
+    for (int f = 0; f < 6; ++f) {
+        out[f] = {c.faces[f].u * iw, c.faces[f].v * ih, c.faces[f].w * iw, c.faces[f].h * ih};
+    }
+}
+
+// Deterministic fallback palette for custom species without a texture: a
+// stable name hash picks one of a few pleasant trios.
+void fallback_palette(const std::string& name, glm::vec3& body, glm::vec3& head,
+                      glm::vec3& limb) {
+    static const glm::vec3 kPalettes[][3] = {
+        {{0.45f, 0.26f, 0.55f}, {0.60f, 0.40f, 0.68f}, {0.34f, 0.19f, 0.42f}}, // violet
+        {{0.18f, 0.45f, 0.48f}, {0.28f, 0.62f, 0.60f}, {0.12f, 0.32f, 0.35f}}, // teal
+        {{0.62f, 0.38f, 0.20f}, {0.75f, 0.52f, 0.30f}, {0.45f, 0.26f, 0.13f}}, // russet
+        {{0.30f, 0.42f, 0.20f}, {0.42f, 0.58f, 0.28f}, {0.20f, 0.30f, 0.13f}}, // moss
+        {{0.55f, 0.20f, 0.22f}, {0.70f, 0.32f, 0.32f}, {0.40f, 0.13f, 0.15f}}, // crimson
+        {{0.28f, 0.32f, 0.55f}, {0.40f, 0.46f, 0.72f}, {0.18f, 0.22f, 0.40f}}, // indigo
+        {{0.60f, 0.52f, 0.28f}, {0.75f, 0.68f, 0.40f}, {0.44f, 0.38f, 0.18f}}, // gold
+        {{0.35f, 0.35f, 0.38f}, {0.52f, 0.52f, 0.56f}, {0.22f, 0.22f, 0.25f}}, // slate
+    };
+    uint32_t hash = 2166136261u;
+    for (char c : name) hash = (hash ^ static_cast<uint8_t>(c)) * 16777619u;
+    const auto& p = kPalettes[hash % 8];
+    body = p[0]; head = p[1]; limb = p[2];
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- lifecycle
@@ -62,82 +90,136 @@ bool MobRenderer::init() {
     glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex), (void*)offsetof(Vertex, r));
     glBindVertexArray(0);
 
-    // Fallback palettes (order matches MobType: zombie, skeleton, cow, pig).
-    entries_.clear();
-    for (int i = 0; i < 4; ++i) entries_.push_back(ModelEntry{});
-    entries_[0].zombie_arms = true;
-    entries_[2].quadruped = true;
-    entries_[3].quadruped = true;
-    entries_[0].col_body = {0.10f, 0.22f, 0.45f};
-    entries_[0].col_head = {0.20f, 0.52f, 0.28f};
-    entries_[0].col_limb = {0.12f, 0.14f, 0.34f};
-    entries_[1].col_body = {0.62f, 0.63f, 0.60f};
-    entries_[1].col_head = {0.88f, 0.89f, 0.86f};
-    entries_[1].col_limb = {0.80f, 0.81f, 0.78f};
-    entries_[2].col_body = {0.42f, 0.27f, 0.16f};
-    entries_[2].col_head = {0.30f, 0.19f, 0.11f};
-    entries_[2].col_limb = {0.25f, 0.16f, 0.10f};
-    entries_[3].col_body = {0.95f, 0.60f, 0.64f};
-    entries_[3].col_head = {0.98f, 0.70f, 0.72f};
-    entries_[3].col_limb = {0.82f, 0.50f, 0.54f};
+    // Species list: registry (built-ins + custom Blockbench models). The scan
+    // is safe to repeat — it replaces previous customs.
+    MobRegistry& registry = MobRegistry::instance();
+    registry.scan_directory("assets/models/mobs");
+    const size_t species_count = registry.size();
 
-    // Blockbench models: assets/models/mobs/<species>.geo.json + .png.
+    // Built-in fallback palettes (order matches MobType: zombie, skeleton,
+    // cow, pig); customs get a stable name-derived palette.
+    entries_.resize(species_count);
+    if (species_count >= 4) {
+        entries_[0].zombie_arms = true;
+        entries_[2].quadruped = true;
+        entries_[3].quadruped = true;
+        entries_[0].col_body = {0.10f, 0.22f, 0.45f};
+        entries_[0].col_head = {0.20f, 0.52f, 0.28f};
+        entries_[0].col_limb = {0.12f, 0.14f, 0.34f};
+        entries_[1].col_body = {0.62f, 0.63f, 0.60f};
+        entries_[1].col_head = {0.88f, 0.89f, 0.86f};
+        entries_[1].col_limb = {0.80f, 0.81f, 0.78f};
+        entries_[2].col_body = {0.42f, 0.27f, 0.16f};
+        entries_[2].col_head = {0.30f, 0.19f, 0.11f};
+        entries_[2].col_limb = {0.25f, 0.16f, 0.10f};
+        entries_[3].col_body = {0.95f, 0.60f, 0.64f};
+        entries_[3].col_head = {0.98f, 0.70f, 0.72f};
+        entries_[3].col_limb = {0.82f, 0.50f, 0.54f};
+    }
+
     // Phase 1: decode every texture into CPU memory (a GL_TEXTURE_2D_ARRAY
     // must be allocated once with its final depth — re-allocating per layer
-    // would wipe earlier layers).
-    const char* species[4] = {"zombie", "skeleton", "cow", "pig"};
+    // would wipe earlier layers). Textures may be any size; the array is
+    // allocated at the largest and smaller textures are resampled to match.
     struct LoadedTex {
         std::vector<stbi_uc> pixels;
+        int w = 0, h = 0;
         int layer = -1;
     };
-    std::vector<LoadedTex> texs(4);
+    std::vector<LoadedTex> texs(species_count);
     int total_layers = 0;
-    for (int i = 0; i < 4; ++i) {
-        std::string base = std::string("assets/models/mobs/") + species[i];
+    for (size_t i = 0; i < species_count; ++i) {
+        const MobSpec* spec = registry.by_id(static_cast<uint8_t>(i));
+        if (!spec) continue;
+        entries_[i].name = spec->name;
+        entries_[i].scale = spec->scale;
+        entries_[i].quadruped = spec->quadruped;
+        entries_[i].zombie_arms = spec->zombie_arms;
+        if (i >= 4) fallback_palette(spec->name, entries_[i].col_body, entries_[i].col_head,
+                                     entries_[i].col_limb);
+
         std::string error;
-        auto geo = GeoModel::load_from_file(base + ".geo.json", &error);
+        auto geo = GeoModel::load_from_file(spec->model_path, &error);
         if (!geo) {
             MC_LOG_WARN("MobRenderer: no model for {} ({}) — procedural fallback",
-                        species[i], error);
+                        spec->name, error);
             continue;
         }
-        int w = 0, h = 0, comp = 0;
-        stbi_uc* pixels = stbi_load((base + ".png").c_str(), &w, &h, &comp, 4);
-        if (!pixels) {
-            MC_LOG_WARN("MobRenderer: model {} missing texture {}.png", species[i], base);
-            continue;
+        std::vector<stbi_uc> pixels;
+        int w = 0, h = 0;
+        if (!spec->texture_path.empty()) {
+            int comp = 0;
+            stbi_uc* p = stbi_load(spec->texture_path.c_str(), &w, &h, &comp, 4);
+            if (p) {
+                pixels.assign(p, p + static_cast<size_t>(w) * h * 4);
+                stbi_image_free(p);
+            } else {
+                MC_LOG_WARN("MobRenderer: texture {} failed to decode — procedural fallback",
+                            spec->texture_path);
+            }
         }
-        if (w != 64 || h != 64) {
-            MC_LOG_WARN("MobRenderer: texture {} is {}x{}, expected 64x64 — UVs may drift",
-                        base, w, h);
+        if (pixels.empty() && !geo->embedded_png.empty()) {
+            int comp = 0;
+            stbi_uc* p = stbi_load_from_memory(geo->embedded_png.data(),
+                                               static_cast<int>(geo->embedded_png.size()),
+                                               &w, &h, &comp, 4);
+            if (p) {
+                pixels.assign(p, p + static_cast<size_t>(w) * h * 4);
+                stbi_image_free(p);
+                MC_LOG_INFO("MobRenderer: using texture embedded in {}", spec->model_path);
+            } else {
+                MC_LOG_WARN("MobRenderer: embedded texture of {} failed to decode",
+                            spec->name);
+            }
+        }
+        if (pixels.empty()) {
+            MC_LOG_WARN("MobRenderer: model {} missing texture — procedural fallback",
+                        spec->name);
+            continue;
         }
         LoadedTex& t = texs[i];
-        t.pixels.assign(pixels, pixels + static_cast<size_t>(w) * h * 4);
-        stbi_image_free(pixels);
+        t.pixels = std::move(pixels);
+        t.w = w;
+        t.h = h;
         t.layer = total_layers++;
         entries_[i].geo = std::move(geo);
         entries_[i].texture_layer = t.layer;
         MC_LOG_INFO("MobRenderer: loaded Blockbench model for {} ({} bones)",
-                    species[i], entries_[i].geo->bones.size());
+                    spec->name, entries_[i].geo->bones.size());
     }
 
     if (total_layers > 0) {
+        int max_w = 64, max_h = 64;
+        for (const auto& t : texs) {
+            if (t.layer < 0) continue;
+            max_w = std::max(max_w, t.w);
+            max_h = std::max(max_h, t.h);
+        }
         glGenTextures(1, &tex_array_);
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 64, 64, total_layers, 0, GL_RGBA,
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, max_w, max_h, total_layers, 0, GL_RGBA,
                      GL_UNSIGNED_BYTE, nullptr);
-        for (int i = 0; i < 4; ++i) {
+        std::vector<stbi_uc> scaled;
+        for (size_t i = 0; i < species_count; ++i) {
             if (texs[i].layer < 0) continue;
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, texs[i].layer, 64, 64, 1,
-                            GL_RGBA, GL_UNSIGNED_BYTE, texs[i].pixels.data());
+            if (texs[i].w != max_w || texs[i].h != max_h) {
+                resample_rgba_nearest(texs[i].pixels.data(), texs[i].w, texs[i].h, scaled,
+                                      max_w, max_h);
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, texs[i].layer, max_w, max_h, 1,
+                                GL_RGBA, GL_UNSIGNED_BYTE, scaled.data());
+            } else {
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, texs[i].layer, max_w, max_h, 1,
+                                GL_RGBA, GL_UNSIGNED_BYTE, texs[i].pixels.data());
+            }
         }
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         layer_count_ = total_layers;
-        array_w_ = array_h_ = 64;
+        array_w_ = max_w;
+        array_h_ = max_h;
     }
 
     batch_.reserve(1 << 15);
@@ -264,6 +346,7 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
         glm::mat4 root = glm::translate(glm::mat4(1.0f),
                                         glm::vec3(mob.pos.x, mob.pos.y, mob.pos.z));
         root = glm::rotate(root, glm::radians(mob.yaw), glm::vec3(0, 1, 0));
+        if (entry.scale != 1.0f) root = glm::scale(root, glm::vec3(entry.scale));
 
         if (entry.geo) {
             const GeoModel& model = *entry.geo;
@@ -271,17 +354,27 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
             float quad_gait = pose.walk_swing / 0.45f * 0.35f; // quadruped amplitude
 
             // Parents appear before children in practice; a second sweep makes
-            // arbitrary order safe.
+            // arbitrary order safe. Bone pivots are ABSOLUTE model-space
+            // coordinates (Bedrock semantics), so a child translates by the
+            // DIFFERENCE to its parent's pivot — composing the parent's full
+            // translation again would float the child's limbs.
             for (int pass = 0; pass < 2; ++pass) {
                 for (size_t i = 0; i < model.bones.size(); ++i) {
                     const GeoBone& bone = model.bones[i];
                     glm::mat4 parent = bone.parent >= 0
                                            ? bone_mats_[static_cast<size_t>(bone.parent)]
                                            : root;
-                    glm::mat4 m = glm::translate(parent, bone.pivot * kUnit);
-                    float rot = bone.base_rot_x +
-                                anim_rot(bone.anim, entry.zombie_arms, pose, quad_gait);
-                    if (rot != 0.0f) m = glm::rotate(m, rot, glm::vec3(1, 0, 0));
+                    glm::vec3 base = bone.pivot;
+                    if (bone.parent >= 0)
+                        base -= model.bones[static_cast<size_t>(bone.parent)].pivot;
+                    glm::mat4 m = glm::translate(parent, base * kUnit);
+                    float rot_x = glm::radians(bone.base_rot_deg.x) +
+                                  anim_rot(bone.anim, entry.zombie_arms, pose, quad_gait);
+                    if (rot_x != 0.0f) m = glm::rotate(m, rot_x, glm::vec3(1, 0, 0));
+                    if (bone.base_rot_deg.y != 0.0f)
+                        m = glm::rotate(m, glm::radians(bone.base_rot_deg.y), glm::vec3(0, 1, 0));
+                    if (bone.base_rot_deg.z != 0.0f)
+                        m = glm::rotate(m, glm::radians(bone.base_rot_deg.z), glm::vec3(0, 0, 1));
                     bone_mats_[i] = m;
                 }
             }
@@ -291,10 +384,28 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
                 for (const auto& cube : bone.cubes) {
                     glm::vec3 center = cube.origin + cube.size * 0.5f - bone.pivot;
                     glm::vec3 sized = cube.size + glm::vec3(cube.inflate * 2.0f);
-                    glm::mat4 t = glm::scale(
-                        glm::translate(bone_mats_[i], center * kUnit), sized * kUnit);
+                    glm::mat4 t;
+                    if (cube.rotated) {
+                        // Rotate around the cube's own pivot, then place the
+                        // (possibly inflated) box so its center lands where
+                        // the unrotated center would be.
+                        glm::vec3 pivot_rel = cube.rot_pivot - bone.pivot;
+                        t = glm::translate(bone_mats_[i], pivot_rel * kUnit);
+                        t = glm::rotate(t, glm::radians(cube.rot_deg.x), glm::vec3(1, 0, 0));
+                        t = glm::rotate(t, glm::radians(cube.rot_deg.y), glm::vec3(0, 1, 0));
+                        t = glm::rotate(t, glm::radians(cube.rot_deg.z), glm::vec3(0, 0, 1));
+                        t = glm::translate(t, (center - pivot_rel) * kUnit);
+                    } else {
+                        t = glm::translate(bone_mats_[i], center * kUnit);
+                    }
+                    t = glm::scale(t, sized * kUnit);
+
                     UvRect rects[6];
-                    box_uv_rects(cube, model.tex_w, model.tex_h, rects);
+                    if (cube.per_face) {
+                        per_face_rects(cube, model.tex_w, model.tex_h, rects);
+                    } else {
+                        box_uv_rects(cube, model.tex_w, model.tex_h, rects);
+                    }
 
                     glm::vec3 white{1.0f};
                     glm::vec3 tint = white;

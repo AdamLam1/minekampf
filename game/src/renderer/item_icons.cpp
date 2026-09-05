@@ -1,14 +1,21 @@
 #include "renderer/item_icons.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <type_traits>
 #include <cmath>
 #include <cstring>
 
 #include <glad/gl.h>
 
+#include <filesystem>
+
+#include "core/logger.hpp"
+#include "gameplay/item.hpp"
 #include "renderer/texture_atlas.hpp"
 #include "world/block.hpp"
+
+#include "third_party/stb_image.h"
 
 namespace mc {
 
@@ -489,6 +496,67 @@ void ItemIcons::generate(const TextureAtlas& atlas) {
     with_mat(ITEM_BOW, kWood, art_bow, 228, 228, 234);
     with_mat(ITEM_ARROW, kWood, art_arrow, 232, 232, 238);
     with_mat(ITEM_BOOK, kLeather, art_book, 200, 60, 60);
+
+    // Custom icon overrides: assets/icons/<name>.png replaces the icon of
+    // the item or block whose registry name matches the file stem
+    // (case-insensitive). Any PNG resolution; box-downsampled to the cell.
+    {
+        std::error_code ec;
+        const std::filesystem::path dir = "assets/icons";
+        if (std::filesystem::exists(dir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                if (!entry.is_regular_file()) continue;
+                std::string ext = entry.path().extension().string();
+                for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                if (ext != ".png") continue;
+                std::string stem = entry.path().stem().string();
+                for (char& ch : stem) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                ItemId id = ItemRegistry::id_from_name(stem);
+                if (id == ITEM_AIR) {
+                    MC_LOG_WARN("ItemIcons: no item named '{}' — ignoring assets/icons/{}",
+                                stem, entry.path().filename().string());
+                    continue;
+                }
+                int w = 0, h = 0, comp = 0;
+                stbi_uc* p = stbi_load(entry.path().string().c_str(), &w, &h, &comp, 4);
+                if (!p) {
+                    MC_LOG_WARN("ItemIcons: failed to decode {}", entry.path().string());
+                    continue;
+                }
+                int cell = icon_cell(id);
+                int ox = (cell % ATLAS_COLS) * ICON_PX;
+                int oy = (cell / ATLAS_COLS) * ICON_PX;
+                // Center-crop to a square, then box-downsample to 32x32.
+                int side = std::min(w, h);
+                int sx0 = (w - side) / 2, sy0 = (h - side) / 2;
+                for (int cy = 0; cy < ICON_PX; ++cy) {
+                    int py0 = sy0 + cy * side / ICON_PX;
+                    int py1 = sy0 + (cy + 1) * side / ICON_PX;
+                    if (py1 <= py0) py1 = py0 + 1;
+                    for (int cx = 0; cx < ICON_PX; ++cx) {
+                        int px0 = sx0 + cx * side / ICON_PX;
+                        int px1 = sx0 + (cx + 1) * side / ICON_PX;
+                        if (px1 <= px0) px1 = px0 + 1;
+                        int r = 0, g = 0, b = 0, a = 0, n = 0;
+                        for (int py = py0; py < py1; ++py) {
+                            for (int px = px0; px < px1; ++px) {
+                                const stbi_uc* s = p + (static_cast<size_t>(py) * w + px) * 4;
+                                r += s[0]; g += s[1]; b += s[2]; a += s[3]; ++n;
+                            }
+                        }
+                        int i = ((oy + cy) * ATLAS_COLS * ICON_PX + ox + cx) * 4;
+                        pixels_[i] = static_cast<uint8_t>(r / n);
+                        pixels_[i + 1] = static_cast<uint8_t>(g / n);
+                        pixels_[i + 2] = static_cast<uint8_t>(b / n);
+                        pixels_[i + 3] = static_cast<uint8_t>(a / n);
+                    }
+                }
+                stbi_image_free(p);
+                MC_LOG_INFO("ItemIcons: custom icon for '{}' from {}", stem,
+                            entry.path().filename().string());
+            }
+        }
+    }
 
     // HUD stat sprites (UiSprite cells).
     auto heart = [&](int cell, int fill, uint8_t fr, uint8_t fg, uint8_t fb) {

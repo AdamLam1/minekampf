@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <vector>
 #include "core/types.hpp"
 #include "physics/aabb.hpp"
 #include "gameplay/ai/goal.hpp"
@@ -11,15 +13,82 @@
 namespace mc {
 
 // Mob species. Distinct stats/AI per species; rendering picks colors by type.
+// Values 0..3 are the built-in species; 4+ are data-driven custom species
+// discovered from assets/models/mobs/* by MobRegistry (ids assigned by
+// alphabetical order of the discovered species, stable within a session).
 enum class MobType : uint8_t {
     Zombie = 0,
     Skeleton,
     Cow,
     Pig,
 };
+inline constexpr uint8_t kCustomMobBase = 4;
+inline constexpr uint8_t kMaxMobSpecies = 254; // 255 reserved as "invalid"
 
-[[nodiscard]] inline constexpr bool is_hostile(MobType t) { return t == MobType::Zombie || t == MobType::Skeleton; }
-[[nodiscard]] inline constexpr bool is_monster_category(MobType t) { return is_hostile(t); }
+struct MobSpec {
+    uint8_t id = 0;                 // MobType value
+    std::string name;               // lookup key, lowercase (filename stem)
+    std::string display_name;       // capitalized, for chat/UI
+    std::string model_path;         // .geo.json or .bbmodel
+    std::string texture_path;       // sidecar .png ("" => use embedded texture)
+    bool hostile = false;
+    float health = 10.0f;
+    float speed = 0.05f;
+    float attack_damage = 2.0f;
+    float follow_range = 16.0f;
+    float scale = 1.0f;             // model render scale
+    float body_width = 0.6f;        // hitbox (blocks)
+    float body_height = 1.8f;
+    bool quadruped = false;         // procedural fallback rig shape
+    bool zombie_arms = false;       // procedural fallback rig shape
+    int xp_reward = 2;
+    std::string drop_item;          // item name dropped on death ("" = none)
+    uint8_t drop_min = 0;
+    uint8_t drop_max = 0;
+    bool builtin = false;           // one of the four compiled-in species
+};
+
+// Registry of every mob species the game can spawn: the four built-ins plus
+// custom Blockbench models found in assets/models/mobs/ at startup. Custom
+// species may carry a sidecar <name>.mob.json overriding the defaults.
+class MobRegistry {
+public:
+    static MobRegistry& instance();
+
+    // Re-discovers custom species in `dir` (replaces previous customs).
+    // Broken files are skipped; failures are reported through `err`/return.
+    bool scan_directory(const std::string& dir, std::string* err = nullptr);
+
+    // Built-in species only (zombie, skeleton, cow, pig), ids 0..3. Used by
+    // tests to get an isolated registry state.
+    void reset_to_builtin();
+
+    size_t size() const { return specs_.size(); }
+    const MobSpec* by_id(uint8_t id) const;
+    // Case-insensitive name lookup; returns nullptr when unknown.
+    const MobSpec* find(std::string_view name) const;
+    // All discovered (non-builtin) species, in id order.
+    std::vector<const MobSpec*> customs() const;
+    // One custom species of the given hostility (round-robin by `tick`);
+    // returns nullptr when none exist.
+    const MobSpec* random_custom(bool hostile, uint32_t tick) const;
+
+    // Applies spec stats/AI to a freshly-positioned mob (used by the spawner
+    // and by /spawnmob for custom species).
+    static void apply_spec(Mob& m, const MobSpec& spec);
+
+private:
+    MobRegistry();
+    std::vector<MobSpec> specs_;
+};
+
+[[nodiscard]] inline bool is_hostile(MobType t) {
+    const uint8_t id = static_cast<uint8_t>(t);
+    if (id < kCustomMobBase) return t == MobType::Zombie || t == MobType::Skeleton;
+    const MobSpec* s = MobRegistry::instance().by_id(id);
+    return s ? s->hostile : false;
+}
+[[nodiscard]] inline bool is_monster_category(MobType t) { return is_hostile(t); }
 
 struct Entity {
     Vec3 pos{0, 0, 0};
@@ -44,6 +113,8 @@ struct Mob : public Entity {
     float speed = 0.2f;
     float health = 20.0f;
     float max_health = 20.0f;
+    float body_width = 0.6f;   // hitbox footprint (blocks)
+    float body_height = 1.8f;  // hitbox height (blocks)
     float armor_points = 0.0f;
     float armor_toughness = 0.0f;
     float knockback_resistance = 0.0f;
@@ -54,6 +125,10 @@ struct Mob : public Entity {
     int despawn_timer = 0;
     uint8_t spawn_category = 0;
     int attack_cooldown = 0;
+
+    [[nodiscard]] AABB aabb() const override {
+        return AABB::from_entity(pos, body_width, body_height);
+    }
 
     // Combat targeting: the nearest player position, refreshed every tick by
     // the simulation owner (Game). Null => no player tracked.

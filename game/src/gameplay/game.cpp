@@ -2079,6 +2079,18 @@ void Game::on_mob_killed_by_player(const Mob& m) {
         uint8_t drops = static_cast<uint8_t>(1 + rng_.next_int(2));
         ItemStack meat(ITEM_RAW_MEAT, drops);
         player_.inventory.add_item_to_main(meat);
+    } else if (static_cast<uint8_t>(m.type) >= kCustomMobBase) {
+        // Custom species drop whatever their .mob.json declares.
+        const MobSpec* spec = MobRegistry::instance().by_id(static_cast<uint8_t>(m.type));
+        if (spec && !spec->drop_item.empty() && spec->drop_max > 0) {
+            int lo = spec->drop_min, hi = spec->drop_max;
+            int count = lo >= hi ? lo : lo + rng_.next_int(hi - lo + 1);
+            ItemId drop_id = ItemRegistry::id_from_name(spec->drop_item);
+            if (drop_id != ITEM_AIR && count > 0) {
+                ItemStack drop(drop_id, static_cast<uint8_t>(count));
+                player_.inventory.add_item_to_main(drop);
+            }
+        }
     }
     // Single kill-quest hook: melee, arrows and future sources funnel here.
     if (quest::on_kill(player_.quest, m.type)) {
@@ -3506,10 +3518,11 @@ void Game::execute_command(const std::string& cmd) {
         ss >> type_name;
         std::optional<MobType> forced;
         MobCategory spawn_cat = MobCategory::Monster;
-        if (type_name == "zombie") forced = MobType::Zombie;
-        else if (type_name == "skeleton") forced = MobType::Skeleton;
-        else if (type_name == "cow") { forced = MobType::Cow; spawn_cat = MobCategory::Creature; }
-        else if (type_name == "pig") { forced = MobType::Pig; spawn_cat = MobCategory::Creature; }
+        // Registry lookup covers built-ins plus custom Blockbench species.
+        if (const MobSpec* spec = MobRegistry::instance().find(type_name)) {
+            forced = static_cast<MobType>(spec->id);
+            spawn_cat = spec->hostile ? MobCategory::Monster : MobCategory::Creature;
+        }
         float ring_min = 6.0f;
         if (float dist; ss >> dist) ring_min = std::clamp(dist, 1.0f, 20.0f);
         World& w = *worlds_[current_dimension_];

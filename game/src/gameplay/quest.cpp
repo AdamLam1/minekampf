@@ -35,13 +35,11 @@ bool add_or_override(QuestDef def) {
 }
 
 bool mob_from_name(std::string_view name, MobType& out) {
-    std::string n;
-    n.reserve(name.size());
-    for (char c : name) n += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (n == "zombie") { out = MobType::Zombie; return true; }
-    if (n == "skeleton") { out = MobType::Skeleton; return true; }
-    if (n == "cow") { out = MobType::Cow; return true; }
-    if (n == "pig") { out = MobType::Pig; return true; }
+    // Registry lookup covers the built-ins plus any custom Blockbench species.
+    if (const MobSpec* spec = MobRegistry::instance().find(name)) {
+        out = static_cast<MobType>(spec->id);
+        return true;
+    }
     return false;
 }
 

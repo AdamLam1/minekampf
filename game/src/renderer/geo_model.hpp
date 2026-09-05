@@ -1,24 +1,39 @@
 #pragma once
 
-// Blockbench model pipeline: runtime loader for Bedrock entity geometry
-// (.geo.json — what Blockbench's "Minecraft Entity" projects export).
+// Blockbench model pipeline: runtime loader for the two formats Blockbench
+// produces:
+//   * Bedrock entity geometry (.geo.json — "Export Bedrock Geometry"), and
+//   * native Blockbench project files (.bbmodel — File -> Save As), including
+//     the texture embedded as base64.
 //
-// Workflow for artists (human or AI):
-//   1. Model the entity in Blockbench (blockbench.net).
-//   2. File -> Export -> "Bedrock Geometry" -> assets/models/mobs/<name>.geo.json
-//   3. Export texture as <name>.png next to it (box UV unwrap).
-// The game hot-swaps the model at startup; deleting the file falls back to
-// the procedural rig. Units: Bedrock model space is 1/16 of a block, Y up,
-// feet at y = 0.
+// Workflow for artists (human or AI): model the entity in Blockbench
+// (blockbench.net), then EITHER
+//   1. File -> Export -> "Bedrock Geometry" -> assets/models/mobs/<name>.geo.json
+//      plus a box-UV texture <name>.png next to it, OR
+//   2. drop the saved project file itself: assets/models/mobs/<name>.bbmodel
+//      (texture embedded in the file, no extra PNG needed).
+// Files are discovered by MobRegistry at startup; a missing/corrupt file
+// falls back to the procedural rig. Units: 1/16 of a block, Y up, feet at
+// y = 0.
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace mc {
 
+// Nearest-neighbour RGBA resampler (model-pipeline utility, no GL). Used to
+// normalize mob textures of arbitrary sizes into one GL_TEXTURE_2D_ARRAY
+// (all layers share dims). Exposed for unit tests. `dst` receives
+// dw*dh*4 bytes.
+void resample_rgba_nearest(const uint8_t* src, int src_w, int src_h,
+                           std::vector<uint8_t>& dst, int dst_w, int dst_h);
+
+// Automatic animation role derived from the bone name. Custom bones that
+// match none of the heuristics stay static (GeoAnim::None).
 enum class GeoAnim {
     None,     // no automatic animation (torso, accessories)
     Head,     // follows mob pitch
@@ -32,19 +47,36 @@ enum class GeoAnim {
     LegBR,
 };
 
+// Rect in texture pixels. Face order everywhere below:
+// 0 = south (+Z), 1 = north (-Z), 2 = down (-Y), 3 = up (+Y),
+// 4 = west (-X), 5 = east (+X).
+struct GeoUvRect {
+    float u = 0.0f, v = 0.0f, w = 0.0f, h = 0.0f;
+};
+
 struct GeoCube {
     glm::vec3 origin{0.0f};  // cube corner in model units (1/16 block)
     glm::vec3 size{0.0f};    // extents in model units
     glm::vec2 uv{0.0f};      // box-unwrap origin in texture pixels
     bool mirror = false;
     float inflate = 0.0f;    // outward padding in model units
+
+    // Per-face UV mode (bbmodel always; .geo.json when "uv" is an object).
+    // When set, `faces` holds explicit rects and `uv` is unused.
+    bool per_face = false;
+    GeoUvRect faces[6];
+
+    // Optional cube-local rotation, degrees around `rot_pivot` (model units).
+    glm::vec3 rot_deg{0.0f};
+    glm::vec3 rot_pivot{0.0f};
+    bool rotated = false;
 };
 
 struct GeoBone {
     std::string name;
     int parent = -1;              // index into GeoModel::bones
     glm::vec3 pivot{0.0f};        // joint position, model units
-    float base_rot_x = 0.0f;      // rest pose X rotation, radians
+    glm::vec3 base_rot_deg{0.0f}; // rest pose rotation, degrees (X applied first)
     GeoAnim anim = GeoAnim::None; // derived from the bone name
     std::vector<GeoCube> cubes;
 };
@@ -53,13 +85,22 @@ struct GeoModel {
     std::vector<GeoBone> bones;
     float tex_w = 64.0f;      // declared texture size (for UV normalization)
     float tex_h = 64.0f;
+    // PNG bytes for a texture embedded in a .bbmodel project (empty when the
+    // texture comes from a sidecar file). The renderer decodes this when no
+    // <name>.png sits next to the model.
+    std::vector<uint8_t> embedded_png;
 
     // Total rendered blocks-high of the model (bounds), for sanity checks.
     float height_blocks() const;
 
-    // Parses a .geo.json file. Returns nullptr + reason on failure.
+    // Parses a .geo.json or .bbmodel file. Returns nullptr + reason on failure.
     static std::unique_ptr<GeoModel> load_from_file(const std::string& path,
                                                     std::string* error = nullptr);
+
+    // Parses raw file contents (same formats; used by tests). For bbmodel the
+    // embedded texture is decoded; `path` is only used in error messages.
+    static std::unique_ptr<GeoModel> load_from_memory(const std::string& source,
+                                                      std::string* error = nullptr);
 
     // Classifies a bone name ("head", "leftArm", "leg3", ...) to an anim role.
     static GeoAnim anim_from_name(const std::string& name, float pivot_x,

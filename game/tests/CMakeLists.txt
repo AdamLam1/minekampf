@@ -23,6 +23,7 @@ add_executable(minekampf_tests
     test_quest.cpp
     test_redstone.cpp
     test_modmanager.cpp
+    test_custom_mobs.cpp
     test_safesave.cpp
     test_ai.cpp
 )

@@ -97,8 +97,25 @@ Mob MobSpawner::spawn_mob(MobCategory cat, BlockPos pos, Rng& rng,
     m.is_natural_spawn = true;
     m.yaw = rng.next_float() * 6.2831853f;
 
+    // Custom species carry their own stats/AI/category in MobRegistry.
+    if (forced_type && static_cast<uint8_t>(*forced_type) >= kCustomMobBase) {
+        if (const MobSpec* spec = MobRegistry::instance().by_id(static_cast<uint8_t>(*forced_type))) {
+            m.spawn_category = static_cast<uint8_t>(spec->hostile ? MobCategory::Monster
+                                                                  : MobCategory::Creature);
+            MobRegistry::apply_spec(m, *spec);
+            return m;
+        }
+    }
+
     if (cat == MobCategory::Monster) {
         // Night surface monsters: zombie (melee bruiser) or skeleton (archer).
+        // A hostile custom species joins the pool 25% of the time.
+        const MobSpec* custom =
+            MobRegistry::instance().random_custom(true, rng.next_int(10000));
+        if (forced_type == std::nullopt && custom && rng.next_int(4) == 0) {
+            MobRegistry::apply_spec(m, *custom);
+            return m;
+        }
         bool skeleton = (forced_type == MobType::Skeleton) ||
                         (forced_type == std::nullopt && rng.next_int(2) == 0);
         m.type = skeleton ? MobType::Skeleton : MobType::Zombie;
@@ -116,9 +133,15 @@ Mob MobSpawner::spawn_mob(MobCategory cat, BlockPos pos, Rng& rng,
         m.goal_selector.add_goal(4, std::make_shared<LookAtPlayerGoal>());
         m.goal_selector.add_goal(6, std::make_shared<WanderGoal>());
     } else if (cat == MobCategory::Creature) {
-        // Passive pasture animals; both drop edible meat.
+        // Passive pasture animals; both drop edible meat. A passive custom
+        // species joins the pool 25% of the time.
+        const MobSpec* custom =
+            MobRegistry::instance().random_custom(false, rng.next_int(10000));
         if (forced_type == MobType::Cow || forced_type == MobType::Pig) {
             m.type = *forced_type;
+        } else if (custom && rng.next_int(4) == 0) {
+            MobRegistry::apply_spec(m, *custom);
+            return m;
         } else {
             m.type = (rng.next_int(2) == 0) ? MobType::Pig : MobType::Cow;
         }

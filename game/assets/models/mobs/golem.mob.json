@@ -1,0 +1,13 @@
+{
+  "display_name": "Golem",
+  "hostile": false,
+  "health": 40,
+  "speed": 0.04,
+  "attack_damage": 6,
+  "body_width": 0.9,
+  "body_height": 1.7,
+  "xp": 6,
+  "drop_item": "iron_ingot",
+  "drop_min": 1,
+  "drop_max": 3
+}
