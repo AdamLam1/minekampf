@@ -41,6 +41,10 @@ public:
     void render_opaque(const Camera& camera);
     void render_transparent(const Camera& camera);
     void render_mobs(const Camera& camera, const std::vector<Mob>& mobs, float time);
+    // Mobs (and their animation time) to render into the shadow map during
+    // the next render_opaque call. Pass nullptr to disable. The pointed
+    // vector must stay alive until render_opaque returns.
+    void set_shadow_casters(const std::vector<Mob>* mobs, float time);
     void draw_projectiles(const Camera& camera, const std::vector<Projectile>& projectiles);
 
     [[nodiscard]] GLFWwindow* window() const { return window_; }
@@ -151,6 +155,8 @@ private:
     
     TextureAtlas atlas_;
     MobRenderer mob_renderer_;
+    const std::vector<Mob>* shadow_casters_ = nullptr;
+    float shadow_casters_time_ = 0.0f;
     std::unordered_map<ChunkPos, ChunkMesh> meshes_;
     std::vector<std::pair<float, ChunkPos>> visible_cache_; // reused per frame
     int width_ = 0;

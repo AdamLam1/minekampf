@@ -74,8 +74,8 @@ TEST(EnchantingSystem, EnchantableItemKinds) {
 TEST(EnchantingSystem, RollOffersDeterministic) {
     EnchantOffer a[3];
     EnchantOffer b[3];
-    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, a);
-    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, b);
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, ITEM_IRON_SWORD, a);
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, ITEM_IRON_SWORD, b);
     for (int i = 0; i < 3; ++i) {
         EXPECT_EQ(a[i].xp_cost, b[i].xp_cost);
         EXPECT_EQ(a[i].level, b[i].level);
@@ -85,8 +85,28 @@ TEST(EnchantingSystem, RollOffersDeterministic) {
     }
     // More bookshelves must not lower the slot-3 power.
     EnchantOffer no_shelves[3];
-    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 0, no_shelves);
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 0, ITEM_IRON_SWORD, no_shelves);
     EXPECT_GE(a[2].level, no_shelves[2].level);
+}
+
+TEST(EnchantingSystem, OfferKindFollowsItem) {
+    EnchantOffer sword[3];
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, ITEM_IRON_SWORD, sword);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(sword[i].type, EnchantType::Sharpness);
+
+    EnchantOffer pick[3];
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, ITEM_IRON_PICKAXE, pick);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(pick[i].type, EnchantType::Efficiency);
+
+    EnchantOffer bow[3];
+    EnchantingSystem::roll_offers(42u, 0xDEADBEEF, 15, ITEM_BOW, bow);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(bow[i].type, EnchantType::Unbreaking);
+
+    // Levels stay within the packed 4-bit band regardless of jitter.
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_GE(bow[i].level, 1);
+        EXPECT_LE(bow[i].level, static_cast<int>(ENCHANT_MAX_LEVEL));
+    }
 }
 
 TEST(EnchantingSystem, ApplyAndUpgrade) {

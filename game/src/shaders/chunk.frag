@@ -31,7 +31,8 @@ uniform mat4 u_view_proj;
 uniform vec2 u_near_far;
 uniform float u_pom_dist;    // quality preset: POM active distance (0 = off)
 uniform float u_ssr;         // quality preset: water SSR on/off
-uniform float u_shadow_soft; // quality preset: soft-PCF taps on/off
+uniform float u_shadow_soft;
+uniform float u_shadow_texel; // quality preset: soft-PCF taps on/off
 
 uniform vec3 u_camera_pos;
 uniform vec3 u_sun_dir;
@@ -184,7 +185,7 @@ void main() {
             float current_depth = proj_coords.z;
             float bias = max(0.003 * (1.0 - dot(v_normal, normalize(u_sun_dir))), 0.001);
             vec3 sm_coord = vec3(proj_coords.xy, current_depth - bias);
-            float texel = 1.0 / 4096.0;
+            float texel = u_shadow_texel;
             float rot = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
             vec2 o1 = vec2(cos(rot), sin(rot)) * texel * 1.6;
             vec2 o2 = vec2(cos(rot + 2.094), sin(rot + 2.094)) * texel * 1.6;

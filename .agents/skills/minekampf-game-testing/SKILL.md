@@ -28,8 +28,11 @@ hand — every tool below launches, drives, and kills its own game process.
 
 - Docs: `game/docs/asset_pipeline.md`.
 - Blockbench models: `game/assets/models/mobs/<species>.geo.json` + `.png`
-  (Bedrock geometry exported from Blockbench; hot-swappable, procedural
-  fallback when a file is missing). Bone names drive auto-animation
+  (Bedrock geometry) or a native `.bbmodel` project (per-face UVs + embedded
+  texture). Custom species are data-driven: any new model file (plus optional
+  `<species>.mob.json` sidecar with stats/AI/drops) is discovered at startup
+  and spawnable via `/spawnmob <name>` — see `game/docs/asset_pipeline.md`.
+  Procedural fallback when a file is missing. Bone names drive auto-animation
   (`head`, `leftArm`, `leg_front_left`, ...). Blockbench portable:
   `C:\Users\AdamLam\Tools\Blockbench.exe`.
 - Block texture overrides: `game/assets/textures/<TileName>.png`

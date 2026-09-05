@@ -256,6 +256,11 @@ void Renderer::begin_frame(const Camera& camera) {
                 mesh.opaque.draw();
             }
         }
+        // Mobs cast shadows on the terrain too.
+        if (shadow_casters_ != nullptr) {
+            mob_renderer_.draw_depth(light_space_matrix_, *shadow_casters_,
+                                     shadow_casters_time_);
+        }
         glCullFace(GL_BACK);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
@@ -309,6 +314,9 @@ void Renderer::begin_frame(const Camera& camera) {
     shader_.set_int("u_fog_mode", fog_mode_);
     shader_.set_float("u_shadows_on", shadows_enabled_ ? 1.0f : 0.0f);
     shader_.set_float("u_shadow_soft", shadow_soft_);
+    // Texel size follows the quality-preset shadow map resolution (the old
+    // shader hardcoded 1/4096 and smeared at 2048).
+    shader_.set_float("u_shadow_texel", 1.0f / static_cast<float>(shadow_map_size_));
     shader_.set_float("u_pom_dist", pom_dist_);
     shader_.set_float("u_ssr", ssr_);
 }
@@ -1093,6 +1101,11 @@ void Renderer::init_mob_renderer() {
 
 void Renderer::render_mobs(const Camera& camera, const std::vector<Mob>& mobs, float time) {
     mob_renderer_.draw(camera, mobs, time, sky_brightness_, atlas_);
+}
+
+void Renderer::set_shadow_casters(const std::vector<Mob>* mobs, float time) {
+    shadow_casters_ = mobs;
+    shadow_casters_time_ = time;
 }
 
 void Renderer::draw_projectiles(const Camera& camera, const std::vector<Projectile>& projectiles) {

@@ -637,6 +637,7 @@ void Game::draw_menu_background() {
     renderer_.set_underwater(false);
 
     renderer_.begin_frame(menu_camera);
+    renderer_.set_shadow_casters(nullptr, 0.0f);
     renderer_.render_opaque(menu_camera);
     renderer_.render_transparent(menu_camera);
     renderer_.end_frame();
@@ -1470,6 +1471,53 @@ void Game::tick() {
         }
     }
     
+    // Torch ambience: flames and smoke from nearby torches.
+    if (settings_.particles && current_tick_ % 4 == 0) {
+        const int px = static_cast<int>(std::floor(player_.pos.x));
+        const int py = static_cast<int>(std::floor(player_.pos.y));
+        const int pz = static_cast<int>(std::floor(player_.pos.z));
+        int torches = 0;
+        for (int dy = -6; dy <= 8 && torches < 16; ++dy) {
+            for (int dx = -12; dx <= 12 && torches < 16; ++dx) {
+                for (int dz = -12; dz <= 12 && torches < 16; ++dz) {
+                    if (w.get_block({px + dx, py + dy, pz + dz}) != BLOCK_TORCH) continue;
+                    ++torches;
+                    Particle p;
+                    p.pos = Vec3(px + dx + 0.5f, py + dy + 0.62f, pz + dz + 0.5f);
+                    p.velocity = Vec3((rng_.next_float() - 0.5f) * 0.02f,
+                                      0.25f + rng_.next_float() * 0.15f,
+                                      (rng_.next_float() - 0.5f) * 0.02f);
+                    p.age = 0;
+                    p.max_age = 14 + rng_.next_int(10);
+                    p.size = 0.09f + rng_.next_float() * 0.04f;
+                    p.gravity = 0.0f;
+                    p.collision = false;
+                    p.type = ParticleType::Flame;
+                    p.r = 1.0f;
+                    p.g = 0.62f + rng_.next_float() * 0.2f;
+                    p.b = 0.18f;
+                    particles_.spawn(p);
+                    if (rng_.next_int(3) == 0) {
+                        Particle s;
+                        s.pos = p.pos + Vec3(0.0f, 0.15f, 0.0f);
+                        s.velocity = Vec3((rng_.next_float() - 0.5f) * 0.03f,
+                                          0.5f + rng_.next_float() * 0.3f,
+                                          (rng_.next_float() - 0.5f) * 0.03f);
+                        s.age = 0;
+                        s.max_age = 24 + rng_.next_int(16);
+                        s.size = 0.08f + rng_.next_float() * 0.05f;
+                        s.gravity = -0.01f; // negative gravity = rising smoke
+                        s.collision = false;
+                        s.type = ParticleType::Smoke;
+                        s.r = s.g = s.b = 0.35f;
+                        s.a = 0.5f;
+                        particles_.spawn(s);
+                    }
+                }
+            }
+        }
+    }
+
     {
         ProfileScope ps(ProfileSection::MobSpawning);
         // Refresh per-mob player targeting (pointer must stay current every
@@ -1616,6 +1664,7 @@ void Game::render(float alpha, bool present_after) {
     renderer_.set_underwater(eye_in_water);
 
     renderer_.begin_frame(camera_);
+    renderer_.set_shadow_casters(&mobs_, static_cast<float>(glfwGetTime()));
     renderer_.render_opaque(camera_);
     renderer_.render_mobs(camera_, mobs_, static_cast<float>(glfwGetTime()));
     renderer_.draw_projectiles(camera_, projectiles_);
@@ -2863,6 +2912,59 @@ bool Game::take_craft_result() {
     return true;
 }
 
+bool Game::ui_shift_held(GLFWwindow* w) const {
+    return glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+           glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+}
+
+bool Game::stash_into_range(ItemStack& s, int begin, int end) {
+    bool moved_any = false;
+    // Pass 1: top up matching stacks.
+    for (int i = begin; i < end && !s.is_empty(); ++i) {
+        ItemStack slot = player_.inventory.get_slot(i);
+        if (slot.is_empty() || !slot.can_stack_with(s)) continue;
+        int space = slot.max_stack_size() - slot.count;
+        int take = std::min(space, static_cast<int>(s.count));
+        if (take <= 0) continue;
+        slot.count += static_cast<uint8_t>(take);
+        s.count -= static_cast<uint8_t>(take);
+        if (s.count == 0) s.item = ITEM_AIR;
+        player_.inventory.set_slot(i, slot);
+        moved_any = true;
+    }
+    // Pass 2: fill the first empty slot.
+    for (int i = begin; i < end && !s.is_empty(); ++i) {
+        if (player_.inventory.get_slot(i).is_empty()) {
+            player_.inventory.set_slot(i, s);
+            s = ItemStack();
+            moved_any = true;
+            break;
+        }
+    }
+    return moved_any;
+}
+
+int Game::craft_all_to_inventory() {
+    int crafted = 0;
+    while (crafted < 64) {
+        if (!take_craft_result()) break; // fills/stays on the cursor
+        player_.inventory.add_item_to_main(cursor_stack_);
+        if (!cursor_stack_.is_empty()) break; // inventory full: keep remainder
+        ++crafted;
+    }
+    return crafted;
+}
+
+void Game::quick_move_inventory_slot(int slot_idx) {
+    ItemStack s = player_.inventory.get_slot(slot_idx);
+    if (s.is_empty()) return;
+    const bool from_hotbar = slot_idx < 9;
+    const int begin = from_hotbar ? 9 : 0;
+    const int end = from_hotbar ? 36 : 9;
+    stash_into_range(s, begin, end);
+    player_.inventory.set_slot(slot_idx, s);
+}
+
 void Game::close_inventory() {
     // Return crafting-area and cursor items to the inventory; anything that
     // no longer fits is dropped (and honestly reported) rather than duped.
@@ -2897,12 +2999,6 @@ static const char* enchant_label(EnchantType t) {
 
 void Game::open_enchanting_table(const BlockPos& pos) {
     enchanting_pos_ = pos;
-    int shelves = count_nearby_bookshelves(pos);
-    // Stable per-table offers: mix the position into a hash seed.
-    uint64_t h = static_cast<uint64_t>(static_cast<uint32_t>(pos.x)) * 73856093ull ^
-                 static_cast<uint64_t>(static_cast<uint32_t>(pos.y)) * 19349663ull ^
-                 static_cast<uint64_t>(static_cast<uint32_t>(pos.z)) * 83492791ull;
-    EnchantingSystem::roll_offers(0u, h, shelves, enchant_offers_);
     enchanting_open_ = true;
     state_ = GameState::Inventory;
     glfwSetInputMode(renderer_.window(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -2942,7 +3038,19 @@ void Game::draw_enchanting_area(float panel_x, float panel_y, float slot_size) {
         return;
     }
 
-    // Offers are displayed for the kind that fits the held item.
+    // Offers are rolled per redraw for the HELD item (kind follows the item,
+    // levels are deterministic per world/table) — switching hotbar slots
+    // re-rolls consistently instead of showing mismatched offers.
+    {
+        const BlockPos& table = enchanting_pos_;
+        uint64_t h = static_cast<uint64_t>(static_cast<uint32_t>(table.x)) * 73856093ull ^
+                     static_cast<uint64_t>(static_cast<uint32_t>(table.y)) * 19349663ull ^
+                     static_cast<uint64_t>(static_cast<uint32_t>(table.z)) * 83492791ull;
+        int shelves = count_nearby_bookshelves(table);
+        EnchantingSystem::roll_offers(static_cast<uint32_t>(current_world_meta_.seed),
+                                      h, shelves, held.item, enchant_offers_);
+    }
+
     EnchantType wanted = EnchantingSystem::enchant_for_item(held.item);
     uint8_t current = held.enchant_level_of(wanted);
 
@@ -2953,8 +3061,7 @@ void Game::draw_enchanting_area(float panel_x, float panel_y, float slot_size) {
     float btn_w = 300.0f;
     float btn_h = 30.0f;
     for (int i = 0; i < 3; ++i) {
-        const EnchantOffer& raw = enchant_offers_[i];
-        EnchantOffer offer{raw.xp_cost, wanted, raw.level};
+        const EnchantOffer& offer = enchant_offers_[i];
         float y = panel_y + 52.0f + static_cast<float>(i) * (btn_h + 8.0f);
 
         std::string label = std::string(enchant_label(offer.type)) + " " +
@@ -3024,11 +3131,17 @@ void Game::draw_furnace_area(float panel_x, float panel_y, float slot_size) {
             ui_.draw_rect(sx, sy, slot_size, slot_size, 255, 255, 255, 100);
             if (is_output) {
                 // Collecting output pays out the accumulated smelting XP —
-                // only when at least one item actually moved to the cursor.
+                // only when at least one item actually moved out.
                 if (left_clicked || right_clicked) {
                     if (!f.output.is_empty()) {
                         bool moved = false;
-                        if (cursor_stack_.is_empty()) {
+                        if (ui_shift_held(w)) {
+                            // Shift-click: straight into the inventory.
+                            ItemStack out = f.output;
+                            player_.inventory.add_item_to_main(out);
+                            if (out.count < f.output.count) moved = true;
+                            f.output = out;
+                        } else if (cursor_stack_.is_empty()) {
                             cursor_stack_ = f.output;
                             f.output = ItemStack();
                             moved = true;
@@ -3048,6 +3161,12 @@ void Game::draw_furnace_area(float panel_x, float panel_y, float slot_size) {
                         }
                     }
                 }
+            } else if (left_clicked && ui_shift_held(w)) {
+                // Shift-click: stash the slot straight into the inventory.
+                ItemStack s = ref;
+                ref = ItemStack();
+                player_.inventory.add_item_to_main(s);
+                if (!s.is_empty()) ref = s; // inventory full: keep remainder
             } else if (left_clicked || right_clicked) {
                 move_cursor_into(ref, right_clicked);
             }
@@ -3131,7 +3250,15 @@ void Game::draw_crafting_area(float panel_x, float panel_y, float slot_size) {
             // fall through to icon drawing
         } else {
             ui_.draw_rect(sx, sy, slot_size, slot_size, 255, 255, 255, 100);
-            if (left_clicked || right_clicked) move_cursor_into(ref, right_clicked);
+            if (left_clicked && ui_shift_held(w)) {
+                // Shift-click: send the grid slot back to the inventory.
+                ItemStack s = ref;
+                ref = ItemStack();
+                player_.inventory.add_item_to_main(s);
+                if (!s.is_empty()) ref = s; // inventory full: keep remainder
+            } else if (left_clicked || right_clicked) {
+                move_cursor_into(ref, right_clicked);
+            }
         }
         if (!ref.is_empty()) {
             draw_item_icon(ui_, item_icons_, ref.item, sx + 4, sy + 4, slot_size - 8);
@@ -3164,7 +3291,14 @@ void Game::draw_crafting_area(float panel_x, float panel_y, float slot_size) {
         if (preview.output.count > 1)
             ui_.draw_text(std::to_string(preview.output.count),
                           res_x + res_s - 13, result_y + res_s - 13, 1.0f, 255, 255, 255);
-        if (hover_result && left_clicked) take_craft_result();
+        if (hover_result && left_clicked) {
+            if (ui_shift_held(w)) {
+                int made = craft_all_to_inventory();
+                if (made > 0) add_chat_message("Wytworzono x" + std::to_string(made));
+            } else {
+                take_craft_result();
+            }
+        }
     }
 }
 
@@ -3312,7 +3446,9 @@ void Game::draw_inventory_ui() {
             ui_.draw_rect(sx, sy, slot_size, slot_size, 255, 255, 255, 100);
             
             ItemStack slot_stack = player_.inventory.get_slot(slot_idx);
-            if (left_clicked) {
+            if (left_clicked && ui_shift_held(w)) {
+                quick_move_inventory_slot(slot_idx);
+            } else if (left_clicked) {
                 if (cursor_stack_.is_empty()) {
                     cursor_stack_ = slot_stack;
                     player_.inventory.set_slot(slot_idx, ItemStack());

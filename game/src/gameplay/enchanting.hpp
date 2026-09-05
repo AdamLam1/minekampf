@@ -31,11 +31,12 @@ public:
 
     // --- Enchanting table flow ---
 
-    // Roll the three offers for a table at table_pos with `bookshelves` nearby.
-    // Deterministic per (world_seed, table_pos) so the offers don't flicker
-    // between UI redraws but differ between tables.
+    // Roll the three offers for a table at table_pos with `bookshelves`
+    // nearby, for the held item. Deterministic per (world_seed, table_pos,
+    // item) so offers don't flicker between redraws but differ between
+    // tables and worlds.
     static void roll_offers(uint32_t world_seed, uint64_t table_pos_hash, int bookshelves,
-                            EnchantOffer out_offers[3]);
+                            ItemId item, EnchantOffer out_offers[3]);
 
     // Whether the offer can be applied: item enchantable, level affordable,
     // and the new level would be an upgrade (or a fresh enchant).

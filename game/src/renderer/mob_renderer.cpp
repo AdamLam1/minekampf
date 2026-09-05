@@ -73,6 +73,10 @@ bool MobRenderer::init() {
         MC_LOG_ERROR("Failed to load mob shader");
         return false;
     }
+    if (!shadow_shader_.load_from_files("shaders/shadow.vert", "shaders/shadow.frag")) {
+        MC_LOG_ERROR("Failed to load mob shadow shader");
+        return false;
+    }
 
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
@@ -228,6 +232,7 @@ bool MobRenderer::init() {
 
 void MobRenderer::shutdown() {
     shader_.destroy();
+    shadow_shader_.destroy();
     if (vao_) glDeleteVertexArrays(1, &vao_);
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (tex_array_) glDeleteTextures(1, &tex_array_);
@@ -310,23 +315,10 @@ static float anim_rot(GeoAnim anim, bool zombie_arms, const rig::Pose& pose,
     return 0.0f;
 }
 
-void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float time,
-                       float sky_brightness, const TextureAtlas& atlas) {
-    if (mobs.empty()) return;
-
+void MobRenderer::collect_mob_geometry(const std::vector<Mob>& mobs, float time,
+                                       float sky_light, bool apply_hurt) {
     batch_.clear();
     bone_mats_.clear();
-    glm::mat4 vp = camera.projection() * camera.view();
-    shader_.use();
-    shader_.set_mat4("u_vp", glm::value_ptr(vp));
-    shader_.set_float("u_ambient", std::clamp(0.32f + 0.68f * sky_brightness, 0.0f, 1.0f));
-    // Match the post-pass fog band so mobs sink into the horizon like terrain.
-    shader_.set_vec3("u_fog_color", 0.55f * std::max(sky_brightness, 0.25f),
-                     0.68f * std::max(sky_brightness, 0.25f),
-                     0.90f * std::max(sky_brightness, 0.25f));
-    shader_.set_float("u_fog_near", 75.0f);
-    shader_.set_float("u_fog_far", 140.0f);
-
     for (const auto& mob : mobs) {
         if (!mob.alive) continue;
         const ModelEntry& entry = entry_for(mob.type);
@@ -340,8 +332,8 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
         pose.hurt = mob.hurt_time;
 
         // Shading: ambient sky light + hurt flash mixed toward red.
-        float light = std::clamp(0.35f + 0.65f * sky_brightness, 0.0f, 1.0f);
-        float hurt_k = std::clamp(pose.hurt * 0.8f, 0.0f, 0.8f);
+        float light = std::clamp(0.35f + 0.65f * sky_light, 0.0f, 1.0f);
+        float hurt_k = apply_hurt ? std::clamp(pose.hurt * 0.8f, 0.0f, 0.8f) : 0.0f;
 
         glm::mat4 root = glm::translate(glm::mat4(1.0f),
                                         glm::vec3(mob.pos.x, mob.pos.y, mob.pos.z));
@@ -465,7 +457,25 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
         }
     }
 
+}
+
+void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float time,
+                       float sky_brightness, const TextureAtlas& atlas) {
+    if (mobs.empty()) return;
+
+    collect_mob_geometry(mobs, time, sky_brightness, true);
     if (batch_.empty()) return;
+
+    glm::mat4 vp = camera.projection() * camera.view();
+    shader_.use();
+    shader_.set_mat4("u_vp", glm::value_ptr(vp));
+    shader_.set_float("u_ambient", std::clamp(0.32f + 0.68f * sky_brightness, 0.0f, 1.0f));
+    // Match the post-pass fog band so mobs sink into the horizon like terrain.
+    shader_.set_vec3("u_fog_color", 0.55f * std::max(sky_brightness, 0.25f),
+                     0.68f * std::max(sky_brightness, 0.25f),
+                     0.90f * std::max(sky_brightness, 0.25f));
+    shader_.set_float("u_fog_near", 75.0f);
+    shader_.set_float("u_fog_far", 140.0f);
 
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
@@ -487,6 +497,26 @@ void MobRenderer::draw(const Camera& camera, const std::vector<Mob>& mobs, float
     glBindVertexArray(0);
     // The chunk passes assume units 0..3 still hold the terrain atlas.
     atlas.bind_all(0);
+}
+
+void MobRenderer::draw_depth(const glm::mat4& light_space_matrix,
+                             const std::vector<Mob>& mobs, float time) {
+    if (mobs.empty()) return;
+    collect_mob_geometry(mobs, time, 1.0f, false);
+    if (batch_.empty()) return;
+
+    shadow_shader_.use();
+    shadow_shader_.set_mat4("u_light_space_matrix", glm::value_ptr(light_space_matrix));
+
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(batch_.size() * sizeof(Vertex)),
+                 batch_.data(), GL_STREAM_DRAW);
+    glDisable(GL_CULL_FACE);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batch_.size()));
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT); // the shadow pass runs with front-face culling
+    glBindVertexArray(0);
 }
 
 } // namespace mc

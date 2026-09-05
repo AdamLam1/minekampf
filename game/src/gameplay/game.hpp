@@ -280,6 +280,12 @@ private:
 
     [[nodiscard]] mc::Recipe preview_craft() const; // empty output == no match
     bool take_craft_result();                       // consume + give to cursor
+    // Shift-click helpers: craft-all into the inventory; stash a stack into
+    // the slot range [begin, end); quick-move inside the inventory screen.
+    int craft_all_to_inventory();
+    bool stash_into_range(ItemStack& s, int begin, int end);
+    void quick_move_inventory_slot(int slot_idx);
+    bool ui_shift_held(GLFWwindow* w) const;
     void close_inventory();                         // return grid+cursor items
     void draw_crafting_area(float panel_x, float panel_y, float slot_size);
 

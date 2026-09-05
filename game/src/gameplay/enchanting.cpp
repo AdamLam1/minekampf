@@ -46,27 +46,21 @@ EnchantType EnchantingSystem::enchant_for_item(ItemId item) {
 }
 
 void EnchantingSystem::roll_offers(uint32_t world_seed, uint64_t table_pos_hash, int bookshelves,
-                                   EnchantOffer out_offers[3]) {
+                                   ItemId item, EnchantOffer out_offers[3]) {
+    // The kind follows the item (swords -> Sharpness, ...); the position/world
+    // hash only jitters the level bands so tables differ without flicker.
+    const EnchantType kind = enchant_for_item(item);
     for (int slot = 1; slot <= 3; ++slot) {
         int slot_level = calculate_enchantment_slot_level(slot, bookshelves);
         // XP cost scales with the offered level (Minecraft-ish: 1..30).
         int xp_cost = std::max(1, std::min(slot_level, 30));
 
-        // Pick the enchantment level from the offered power. Higher slots give
-        // higher levels of the same kind; mix in the position hash so the kind
-        // is stable per table but varies between tables.
         const uint64_t h = (table_pos_hash * 0x9E3779B97F4A7C15ull) ^
                            (world_seed + static_cast<uint32_t>(slot) * 0x85EBCA6Bu);
-        const int kind_roll = static_cast<int>((h >> 13) % 100);
+        const int jitter = static_cast<int>((h >> 13) % 3) - 1; // -1..1
 
-        EnchantType kind = EnchantType::Unbreaking;
-        if (kind_roll < 70) {
-            kind = EnchantType::Sharpness; // replaced per-item by can_apply check
-        }
-
-        // Level: divide the slot power across level bands (1-5).
-        uint8_t level = static_cast<uint8_t>(std::max(1, std::min((slot_level + 4) / 6,
-                                                                  static_cast<int>(ENCHANT_MAX_LEVEL))));
+        uint8_t level = static_cast<uint8_t>(std::clamp(
+            (slot_level + 4) / 6 + jitter, 1, static_cast<int>(ENCHANT_MAX_LEVEL)));
 
         out_offers[slot - 1] = EnchantOffer{static_cast<uint8_t>(xp_cost), kind, level};
     }

@@ -48,6 +48,12 @@ public:
     void draw(const Camera& camera, const std::vector<Mob>& mobs, float time,
               float sky_brightness, const TextureAtlas& atlas);
 
+    // Depth-only draw into the shadow map so mobs cast shadows on terrain.
+    // Caller owns the FBO/state (front-face culling); this temporarily
+    // disables culling since box UVs on thin bones wind both ways.
+    void draw_depth(const glm::mat4& light_space_matrix, const std::vector<Mob>& mobs,
+                    float time);
+
 private:
     struct ModelEntry {
         std::unique_ptr<GeoModel> geo;   // null = procedural fallback boxes
@@ -69,6 +75,10 @@ private:
         uint8_t r, g, b, a;
     };
 
+    // Poses every alive mob and appends its cubes to batch_ (shared by the
+    // color and depth passes).
+    void collect_mob_geometry(const std::vector<Mob>& mobs, float time,
+                              float sky_light, bool apply_hurt);
     const ModelEntry& entry_for(MobType type) const;
     // Emits a unit cube transformed by `transform`. `rects` provides per-face
     // box-UV rects; nullptr renders an untextured colored cube (layer = -1).
@@ -77,6 +87,7 @@ private:
                    const glm::vec3& tint) const;
 
     Shader shader_;
+    Shader shadow_shader_;  // depth-only variant for the shadow pass
     uint32_t vao_ = 0;
     uint32_t vbo_ = 0;
     uint32_t tex_array_ = 0;
