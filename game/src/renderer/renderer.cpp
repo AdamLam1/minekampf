@@ -14,6 +14,7 @@
 #include "core/config.hpp"
 #include "core/logger.hpp"
 #include "core/profiler.hpp"
+#include "renderer/item_icons.hpp"
 #include "renderer/mob_rig.hpp"
 #include "world/block.hpp"
 
@@ -760,8 +761,17 @@ void Renderer::draw_hand() {
         view = glm::rotate(view, glm::radians(bob_rot_x), glm::vec3(1, 0, 0));
     }
 
+    const bool item_mode = held_item_ != ITEM_AIR && item_icons_ != nullptr;
     glm::mat4 model;
-    if (held_block_ != BLOCK_AIR) {
+    if (item_mode) {
+        // Held tool/item: extruded icon sprite, tilted like the classic
+        // first-person item pose.
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, glm::vec3(-0.12f, -0.12f, -0.1f));
+        model = glm::rotate(model, glm::radians(20.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(15.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        model = glm::scale(model, glm::vec3(1.15f));
+    } else if (held_block_ != BLOCK_AIR) {
         model = glm::translate(glm::mat4(1.0f), glm::vec3(-0.5f, -0.5f, -0.5f));
     } else {
         model = glm::mat4(1.0f);
@@ -769,12 +779,52 @@ void Renderer::draw_hand() {
         model = glm::scale(model, glm::vec3(0.4f, 1.2f, 0.4f));
     }
     glm::mat4 mvp = proj * view * model;
-    
+
     hand_shader_.set_mat4("u_mvp", glm::value_ptr(mvp));
     hand_shader_.set_float("u_brightness", sky_brightness_);
+    hand_shader_.set_float("u_use_icon", item_mode ? 1.0f : 0.0f);
 
     HandVertex verts[36];
     int v_idx = 0;
+
+    if (item_mode) {
+        // Extruded icon sprite: front + back + 4 border strips (36 verts).
+        float u0 = 0.0f, v0 = 0.0f, u1 = 0.0f, v1 = 0.0f;
+        item_icons_->uv_for(held_item_, u0, v0, u1, v1);
+        const float s = 0.22f;   // sprite half-size
+        const float t = 0.05f;   // extrusion thickness (half)
+        // Corners are (x, y, z, u, v).
+        auto quad = [&](const float a[5], const float b[5], const float c[5],
+                        const float d[5], float shade) {
+            verts[v_idx++] = {a[0], a[1], a[2], a[3], a[4], 0.0f, shade};
+            verts[v_idx++] = {b[0], b[1], b[2], b[3], b[4], 0.0f, shade};
+            verts[v_idx++] = {c[0], c[1], c[2], c[3], c[4], 0.0f, shade};
+            verts[v_idx++] = {a[0], a[1], a[2], a[3], a[4], 0.0f, shade};
+            verts[v_idx++] = {c[0], c[1], c[2], c[3], c[4], 0.0f, shade};
+            verts[v_idx++] = {d[0], d[1], d[2], d[3], d[4], 0.0f, shade};
+        };
+        // Front (+Z): full icon, v flipped so the icon's top row sits at the
+        // top edge (the icons atlas is not row-flipped on upload).
+        const float ftl[5] = {-s,  s,  t, u0, v0}, ftr[5] = { s,  s,  t, u1, v0};
+        const float fbr[5] = { s, -s,  t, u1, v1}, fbl[5] = {-s, -s,  t, u0, v1};
+        const float btl[5] = {-s,  s, -t, u0, v0}, btr[5] = { s,  s, -t, u1, v0};
+        const float bbr[5] = { s, -s, -t, u1, v1}, bbl[5] = {-s, -s, -t, u0, v1};
+        quad(ftl, ftr, fbr, fbl, 1.0f);            // front
+        quad(btr, btl, bbl, bbr, 0.55f);           // back (dimmer)
+        quad(btl, ftl, ftr, btr, 0.8f);            // top edge (v = v0 row)
+        quad(bbl, fbl, fbr, bbr, 0.55f);           // bottom edge (v = v1 row)
+        quad(btl, bbl, fbl, ftl, 0.7f);            // left edge (u = u0 column)
+        quad(ftr, fbr, bbr, btr, 0.7f);            // right edge (u = u1 column)
+        glBindVertexArray(hand_vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, hand_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        item_icons_->bind(0);
+        hand_shader_.set_int("u_icon", 0);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        glBindVertexArray(0);
+        glDisable(GL_BLEND);
+        return;
+    }
     
     auto add_face = [&](Tile tile, const std::vector<glm::vec3>& pos, float shade) {
         float uv00 = 0.0f, v00 = 1.0f;

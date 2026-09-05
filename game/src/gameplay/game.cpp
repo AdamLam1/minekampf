@@ -192,6 +192,7 @@ bool Game::init() {
     // bound to the UI renderer once (texture id is stable for the session).
     item_icons_.generate(renderer_.atlas());
     item_icons_.upload();
+    renderer_.set_item_icons(&item_icons_);
     ui_.set_icon_texture(item_icons_.gl_texture());
 
     audio_ = std::make_unique<AudioEngine>();
@@ -1673,7 +1674,11 @@ void Game::render(float alpha, bool present_after) {
         draw_selection_outline();
     }
 
-    renderer_.set_held_block(player_.inventory.get_selected_item().item);
+    {
+        ItemId sel = player_.inventory.get_selected_item().item;
+        renderer_.set_held_block(sel < BLOCK_COUNT ? static_cast<BlockId>(sel) : BLOCK_AIR);
+        renderer_.set_held_item(sel >= 256 ? sel : ITEM_AIR);
+    }
     if (settings_.particles) particles_.draw(camera_, renderer_.atlas());
     renderer_.render_transparent(camera_);
 

@@ -11,11 +11,14 @@
 #include "renderer/chunk_mesh.hpp"
 #include "renderer/mob_renderer.hpp"
 #include "renderer/shader.hpp"
+#include "gameplay/item.hpp"
 #include "renderer/texture_atlas.hpp"
 
 #include "gameplay/entity.hpp"
 
 namespace mc {
+
+class ItemIcons;
 
 // OpenGL renderer facade (PHASE3). Owns the window, GL context, shader
 // program, texture atlas, and the per-chunk GPU meshes. The gameplay layer
@@ -71,6 +74,11 @@ public:
     void set_quality(QualityPreset q);
     QualityPreset quality() const { return quality_; }
     void set_held_block(BlockId b) { held_block_ = b; }
+    // Item (non-block) currently held, rendered as an extruded icon sprite.
+    // Set to ITEM_AIR when a block or nothing is held.
+    void set_held_item(ItemId id) { held_item_ = id; }
+    // Item icon atlas used to texture the held sprite. Not owned.
+    void set_item_icons(const ItemIcons* icons) { item_icons_ = icons; }
     void set_hand_swing(float s) { hand_swing_ = s; }
     void set_hand_bobbing(float walk_dist, float bob_amp) {
         hand_walk_dist_ = walk_dist;
@@ -166,6 +174,8 @@ private:
     int fog_mode_ = 0;
     float fog_density_ = 0.0f;
     BlockId held_block_ = BLOCK_AIR;
+    ItemId held_item_ = ITEM_AIR;   // 0 = none (block or bare arm path)
+    const ItemIcons* item_icons_ = nullptr;
     bool wireframe_ = false;
     float hand_swing_ = 0.0f;
     float hand_walk_dist_ = 0.0f;
