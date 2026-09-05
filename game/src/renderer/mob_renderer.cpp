@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -188,6 +189,40 @@ bool MobRenderer::init() {
         t.layer = total_layers++;
         entries_[i].geo = std::move(geo);
         entries_[i].texture_layer = t.layer;
+
+        // Optional Blockbench animation file next to the model.
+        {
+            std::filesystem::path model(spec->model_path);
+            std::error_code aec;
+            std::filesystem::path anim_path =
+                model.parent_path() / (spec->name + ".animation.json");
+            if (std::filesystem::exists(anim_path, aec)) {
+                std::string aerr;
+                std::vector<GeoAnimation> anims;
+                int idle_anim = -1;
+                int walk_anim = -1;
+                if (GeoAnimation::load_from_file(anim_path.string(), anims, &aerr)) {
+                    for (size_t a = 0; a < anims.size(); ++a) {
+                        const std::string& n = anims[a].name;
+                        if (idle_anim < 0 && n.find("idle") != std::string::npos)
+                            idle_anim = static_cast<int>(a);
+                        if (walk_anim < 0 && n.find("walk") != std::string::npos)
+                            walk_anim = static_cast<int>(a);
+                    }
+                    if (idle_anim < 0 && walk_anim < 0 && !anims.empty()) idle_anim = 0;
+                    if (walk_anim < 0) walk_anim = idle_anim;
+                    entries_[i].animations = std::move(anims);
+                    entries_[i].idle_anim = idle_anim;
+                    entries_[i].walk_anim = walk_anim;
+                    MC_LOG_INFO("MobRenderer: {} animations for {} ({} loaded)",
+                                entries_[i].idle_anim >= 0 ? "idle" : "walk",
+                                spec->name, entries_[i].animations.size());
+                } else {
+                    MC_LOG_WARN("MobRenderer: bad animation file {}: {}",
+                                anim_path.string(), aerr);
+                }
+            }
+        }
         MC_LOG_INFO("MobRenderer: loaded Blockbench model for {} ({} bones)",
                     spec->name, entries_[i].geo->bones.size());
     }
@@ -345,6 +380,20 @@ void MobRenderer::collect_mob_geometry(const std::vector<Mob>& mobs, float time,
             bone_mats_.assign(model.bones.size(), root);
             float quad_gait = pose.walk_swing / 0.45f * 0.35f; // quadruped amplitude
 
+            // Active animation: walk while moving, idle otherwise (fallback
+            // to whichever exists). Bones with rotation/position tracks get
+            // their pose replaced by the sampled animation; the rest keep
+            // the procedural rig.
+            const GeoAnimation* active = nullptr;
+            if (!entry.animations.empty()) {
+                int idx = moving ? entry.walk_anim : entry.idle_anim;
+                if (idx < 0) idx = entry.idle_anim >= 0 ? entry.idle_anim : entry.walk_anim;
+                if (idx >= 0 && idx < static_cast<int>(entry.animations.size()))
+                    active = &entry.animations[static_cast<size_t>(idx)];
+            }
+            const float anim_len = active && active->length > 0.0f ? active->length : 1.0f;
+            const float anim_t = std::fmod(time, anim_len);
+
             // Parents appear before children in practice; a second sweep makes
             // arbitrary order safe. Bone pivots are ABSOLUTE model-space
             // coordinates (Bedrock semantics), so a child translates by the
@@ -359,14 +408,28 @@ void MobRenderer::collect_mob_geometry(const std::vector<Mob>& mobs, float time,
                     glm::vec3 base = bone.pivot;
                     if (bone.parent >= 0)
                         base -= model.bones[static_cast<size_t>(bone.parent)].pivot;
+
+                    glm::vec3 rot_rad = glm::radians(bone.base_rot_deg);
+                    rot_rad.x += anim_rot(bone.anim, entry.zombie_arms, pose, quad_gait);
+                    const GeoBoneTrack* track = nullptr;
+                    if (active) {
+                        auto it = active->bones.find(bone.name);
+                        if (it != active->bones.end()) track = &it->second;
+                    }
+                    if (track && track->has_rotation()) {
+                        // Animation replaces the procedural pose for this bone.
+                        rot_rad = glm::radians(GeoBoneTrack::sample(
+                            track->rotation, anim_t, anim_len, bone.base_rot_deg));
+                    }
+                    if (track && track->has_position()) {
+                        base += GeoBoneTrack::sample(track->position, anim_t, anim_len,
+                                                     glm::vec3(0.0f));
+                    }
+
                     glm::mat4 m = glm::translate(parent, base * kUnit);
-                    float rot_x = glm::radians(bone.base_rot_deg.x) +
-                                  anim_rot(bone.anim, entry.zombie_arms, pose, quad_gait);
-                    if (rot_x != 0.0f) m = glm::rotate(m, rot_x, glm::vec3(1, 0, 0));
-                    if (bone.base_rot_deg.y != 0.0f)
-                        m = glm::rotate(m, glm::radians(bone.base_rot_deg.y), glm::vec3(0, 1, 0));
-                    if (bone.base_rot_deg.z != 0.0f)
-                        m = glm::rotate(m, glm::radians(bone.base_rot_deg.z), glm::vec3(0, 0, 1));
+                    if (rot_rad.x != 0.0f) m = glm::rotate(m, rot_rad.x, glm::vec3(1, 0, 0));
+                    if (rot_rad.y != 0.0f) m = glm::rotate(m, rot_rad.y, glm::vec3(0, 1, 0));
+                    if (rot_rad.z != 0.0f) m = glm::rotate(m, rot_rad.z, glm::vec3(0, 0, 1));
                     bone_mats_[i] = m;
                 }
             }

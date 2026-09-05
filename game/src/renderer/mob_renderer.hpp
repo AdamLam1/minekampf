@@ -57,6 +57,9 @@ public:
 private:
     struct ModelEntry {
         std::unique_ptr<GeoModel> geo;   // null = procedural fallback boxes
+        std::vector<GeoAnimation> animations; // from <species>.animation.json
+        int idle_anim = -1;              // index into animations ("idle")
+        int walk_anim = -1;              // index into animations ("walk")
         int texture_layer = -1;          // layer in the mob texture array
         bool quadruped = false;          // fallback skeleton layout
         bool zombie_arms = false;        // fallback: raised arms

@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace mc {
@@ -79,6 +80,45 @@ struct GeoBone {
     glm::vec3 base_rot_deg{0.0f}; // rest pose rotation, degrees (X applied first)
     GeoAnim anim = GeoAnim::None; // derived from the bone name
     std::vector<GeoCube> cubes;
+};
+
+// One animation track for a bone: sorted keyframes (time -> value).
+// Blocks keyframes carry Euler rotations in degrees or position offsets in
+// model units; Molang-expression keyframes are skipped by the parser.
+struct GeoBoneTrack {
+    struct Key {
+        float t = 0.0f;
+        glm::vec3 v{0.0f};
+    };
+    std::vector<Key> rotation;   // degrees (empty = not animated)
+    std::vector<Key> position;   // model units (empty = not animated)
+
+    [[nodiscard]] bool has_rotation() const { return !rotation.empty(); }
+    [[nodiscard]] bool has_position() const { return !position.empty(); }
+
+    // Linear interpolation between the surrounding keyframes, wrapping t
+    // into [0, length] for looping animations. Falls back to `fallback`
+    // when the track has no usable keys.
+    static glm::vec3 sample(const std::vector<Key>& keys, float t, float length,
+                            const glm::vec3& fallback);
+};
+
+// One named animation ("idle", "walk", ...) from a Blockbench
+// .animation.json export: per-bone rotation/position tracks.
+struct GeoAnimation {
+    std::string name;
+    float length = 1.0f;   // seconds
+    bool loop = true;
+    std::unordered_map<std::string, GeoBoneTrack> bones;
+
+    // Parses every animation in a .animation.json document. Molang string
+    // keyframes are skipped; purely procedural channels stay empty.
+    static bool load_from_file(const std::string& path,
+                               std::vector<GeoAnimation>& out,
+                               std::string* error = nullptr);
+    static bool load_from_memory(const std::string& source,
+                                 std::vector<GeoAnimation>& out,
+                                 std::string* error = nullptr);
 };
 
 struct GeoModel {

@@ -334,6 +334,93 @@ TEST_F(MobRegistryTest, SpawnerAppliesCustomSpecStats) {
     EXPECT_FLOAT_EQ(box.max.y - box.min.y, 1.0f);
 }
 
+// ------------------------------------------------------------- Animations
+
+TEST(GeoAnimationTest, ParsesKeyframesAndConstants) {
+    const char* kAnim = R"JSON({
+      "format_version": "1.8.0",
+      "animations": {
+        "animation.golem.idle": {
+          "loop": true,
+          "animation_length": 2.0,
+          "bones": {
+            "head": {"rotation": {"0.0": [5, 0, 0], "1.0": {"post": [-5, 10, 0]}, "2.0": [5, 0, 0]}},
+            "body": {"position": [0, 0.5, 0]}
+          }
+        }
+      }
+    })JSON";
+    std::vector<GeoAnimation> anims;
+    std::string err;
+    ASSERT_TRUE(GeoAnimation::load_from_memory(kAnim, anims, &err)) << err;
+    ASSERT_EQ(anims.size(), 1u);
+    EXPECT_EQ(anims[0].name, "animation.golem.idle");
+    EXPECT_FLOAT_EQ(anims[0].length, 2.0f);
+    EXPECT_TRUE(anims[0].loop);
+    ASSERT_EQ(anims[0].bones.size(), 2u);
+
+    const GeoBoneTrack& head = anims[0].bones.at("head");
+    ASSERT_TRUE(head.has_rotation());
+    EXPECT_EQ(head.rotation.size(), 3u);
+    // Start, midpoint and wrap-around sampling.
+    glm::vec3 a = GeoBoneTrack::sample(head.rotation, 0.0f, 2.0f, {0, 0, 0});
+    EXPECT_FLOAT_EQ(a.x, 5.0f);
+    glm::vec3 mid = GeoBoneTrack::sample(head.rotation, 1.0f, 2.0f, {0, 0, 0});
+    EXPECT_FLOAT_EQ(mid.x, -5.0f);
+    EXPECT_FLOAT_EQ(mid.y, 10.0f);
+    glm::vec3 wrap = GeoBoneTrack::sample(head.rotation, 2.4f, 2.0f, {0, 0, 0});
+    // fmod(2.4, 2.0) = 0.4 -> interpolating [5,0,0] -> [-5,10,0].
+    EXPECT_NEAR(wrap.x, 1.0f, 0.01f);
+    EXPECT_NEAR(wrap.y, 4.0f, 0.01f);
+
+    const GeoBoneTrack& body = anims[0].bones.at("body");
+    EXPECT_FALSE(body.has_rotation());
+    ASSERT_TRUE(body.has_position());
+    glm::vec3 p = GeoBoneTrack::sample(body.position, 1.3f, 2.0f, {0, 0, 0});
+    EXPECT_FLOAT_EQ(p.y, 0.5f); // constant track holds everywhere
+}
+
+TEST(GeoAnimationTest, SkipsMolangKeyframes) {
+    const char* kAnim = R"JSON({
+      "animations": {
+        "animation.x.walk": {
+          "loop": true,
+          "animation_length": 1.0,
+          "bones": {
+            "legL": {
+              "rotation": {
+                "0.0": ["math.sin(q.anim_time * 360) * 30", 0, 0],
+                "0.5": [40, 0, 0],
+                "1.0": [0, 0, 0]
+              }
+            },
+            "armR": {"rotation": ["query.modified_distance_moved", 0, 0]}
+          }
+        }
+      }
+    })JSON";
+    std::vector<GeoAnimation> anims;
+    std::string err;
+    ASSERT_TRUE(GeoAnimation::load_from_memory(kAnim, anims, &err)) << err;
+    ASSERT_EQ(anims.size(), 1u);
+    const GeoBoneTrack& leg = anims[0].bones.at("legL");
+    // The Molang first keyframe is skipped; numeric keys survive.
+    ASSERT_EQ(leg.rotation.size(), 2u);
+    EXPECT_FLOAT_EQ(leg.rotation[0].t, 0.5f);
+    // A bone with only a Molang channel is dropped entirely.
+    EXPECT_EQ(anims[0].bones.count("armR"), 0u);
+}
+
+TEST(GeoAnimationTest, RejectsGarbage) {
+    std::vector<GeoAnimation> anims;
+    std::string err;
+    EXPECT_FALSE(GeoAnimation::load_from_memory("{not json", anims, &err));
+    EXPECT_FALSE(GeoAnimation::load_from_memory("{}", anims, &err));
+    EXPECT_TRUE(GeoAnimation::load_from_memory(
+        R"({"animations": {"a": {"bones": {"x": {"rotation": [1,2,3]}}}}})", anims, &err));
+    EXPECT_EQ(anims.size(), 1u);
+}
+
 TEST(QuestNameLookupTest, RegistryCoversBuiltinsAndRejectsUnknown) {
     MobType out = MobType::Zombie;
     EXPECT_TRUE(quest::mob_from_name("zombie", out));

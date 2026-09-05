@@ -123,6 +123,44 @@ bool decode_base64(const std::string& in, std::vector<uint8_t>& out) {
     return !out.empty();
 }
 
+// ------------------------------------------------------------------ animation
+
+// Reads one channel of a bone track. Accepted shapes:
+//   [x,y,z]                                   constant
+//   {"0.0": [x,y,z], "1.0": {"post": [..]}}   keyframes (times in seconds)
+// Keyframes whose time or value is a Molang string are skipped.
+GeoBoneTrack parse_channel(const json& ch) {
+    GeoBoneTrack track;
+    if (ch.is_array() && ch.size() >= 3 && ch.at(0).is_number() && ch.at(1).is_number() &&
+        ch.at(2).is_number()) {
+        track.rotation.push_back({0.0f, vec3_from(ch)});
+        return track;
+    }
+    if (!ch.is_object()) return track;
+    for (auto it = ch.begin(); it != ch.end(); ++it) {
+        float t = -1.0f;
+        try {
+            t = std::stof(it.key());
+        } catch (const std::exception&) {
+            continue; // Molang time expression — not supported
+        }
+        const json* val = &it.value();
+        if (val->is_object()) {
+            if (!val->contains("post")) continue;
+            val = &(*val)["post"];
+        }
+        if (!val->is_array() || val->size() < 3) continue;
+        if (!val->at(0).is_number() || !val->at(1).is_number() || !val->at(2).is_number())
+            continue; // Molang value expression — not supported
+        track.rotation.push_back({t, vec3_from(*val)});
+    }
+    std::sort(track.rotation.begin(), track.rotation.end(),
+              [](const GeoBoneTrack::Key& a, const GeoBoneTrack::Key& b) {
+                  return a.t < b.t;
+              });
+    return track;
+}
+
 // Extracts the PNG payload from a "data:image/png;base64,..." URI.
 bool decode_data_uri(const std::string& uri, std::vector<uint8_t>& png) {
     const std::string marker = "base64,";
@@ -395,6 +433,99 @@ std::unique_ptr<GeoModel> load_geo_json(const json& j, std::string* error) {
 }
 
 } // namespace
+
+// Sample: linear interpolation between surrounding keyframes with wrap.
+glm::vec3 GeoBoneTrack::sample(const std::vector<Key>& keys, float t, float length,
+                               const glm::vec3& fallback) {
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1 || length <= 0.0f) return keys.front().v;
+    float wrapped = t;
+    if (wrapped < 0.0f) wrapped = 0.0f;
+    if (wrapped > length) wrapped = std::fmod(wrapped, length);
+    if (wrapped <= keys.front().t) return keys.front().v;
+    if (wrapped >= keys.back().t) {
+        if (keys.back().t < length && wrapped >= length) {
+            // Wrap: interpolate last key -> first key across the loop seam.
+            float span = length - keys.back().t + keys.front().t;
+            if (span > 0.0001f) {
+                float k = (wrapped - keys.back().t) / span;
+                return keys.back().v +
+                       (keys.front().v - keys.back().v) * std::min(1.0f, std::max(0.0f, k));
+            }
+        }
+        return keys.back().v;
+    }
+    for (size_t i = 1; i < keys.size(); ++i) {
+        if (wrapped <= keys[i].t) {
+            const Key& a = keys[i - 1];
+            const Key& b = keys[i];
+            float span = b.t - a.t;
+            if (span <= 0.0001f) return b.v;
+            float k = (wrapped - a.t) / span;
+            return a.v + (b.v - a.v) * k;
+        }
+    }
+    return keys.back().v;
+}
+
+bool GeoAnimation::load_from_memory(const std::string& source,
+                                    std::vector<GeoAnimation>& out,
+                                    std::string* error) {
+    json j;
+    try {
+        j = json::parse(source);
+    } catch (const std::exception& e) {
+        if (error) *error = std::string("JSON parse: ") + e.what();
+        return false;
+    }
+    if (!j.contains("animations") || !j["animations"].is_object()) {
+        if (error) *error = "no animations object";
+        return false;
+    }
+    out.clear();
+    for (auto it = j["animations"].begin(); it != j["animations"].end(); ++it) {
+        const json& a = it.value();
+        GeoAnimation anim;
+        anim.name = it.key();
+        if (a.is_object()) {
+            anim.length = a.value("animation_length", 1.0f);
+            // "loop" is a boolean in Bedrock exports and sometimes a string.
+            if (a.contains("loop") && a["loop"].is_boolean())
+                anim.loop = a["loop"].get<bool>();
+            else
+                anim.loop = a.value("loop", std::string("true")) != "false";
+            if (a.contains("bones") && a["bones"].is_object()) {
+                for (auto b = a["bones"].begin(); b != a["bones"].end(); ++b) {
+                    if (!b.value().is_object()) continue;
+                    GeoBoneTrack track;
+                    if (b.value().contains("rotation"))
+                        track = parse_channel(b.value()["rotation"]);
+                    if (b.value().contains("position")) {
+                        GeoBoneTrack pos = parse_channel(b.value()["position"]);
+                        track.position = std::move(pos.rotation);
+                    }
+                    if (track.has_rotation() || track.has_position())
+                        anim.bones[b.key()] = std::move(track);
+                }
+            }
+        }
+        if (!anim.bones.empty()) out.push_back(std::move(anim));
+    }
+    return true;
+}
+
+bool GeoAnimation::load_from_file(const std::string& path,
+                                  std::vector<GeoAnimation>& out,
+                                  std::string* error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        if (error) *error = "cannot open " + path;
+        return false;
+    }
+    std::string source((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+    return load_from_memory(source, out, error);
+}
 
 void resample_rgba_nearest(const uint8_t* src, int src_w, int src_h,
                            std::vector<uint8_t>& dst, int dst_w, int dst_h) {
