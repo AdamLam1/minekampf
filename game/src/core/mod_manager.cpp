@@ -9,6 +9,7 @@
 #include "core/event_bus.hpp"
 #include "core/logger.hpp"
 #include "gameplay/item.hpp"
+#include "gameplay/smelting.hpp"
 #include "world/block.hpp"
 
 namespace mc {
@@ -125,8 +126,24 @@ bool ModManager::parse_recipes_json(const std::string& text,
                 r.shapeless_ingredients.push_back(ing);
             }
             out.push_back(std::move(r));
+        } else if (type == "smelting") {
+            // Furnace recipe: {"type":"smelting","input":"iron_ore",
+            //                  "output":"iron_ingot","count":1,"xp":0.7}
+            r.type = RecipeType::Smelting;
+            if (!entry.contains("input") || !entry["input"].is_string())
+                return fail("smelting recipe needs an \"input\" item name");
+            ItemId in_id = ItemRegistry::id_from_name(entry["input"].get<std::string>());
+            if (in_id == ITEM_AIR)
+                return fail("unknown input item \"" + entry["input"].get<std::string>() + "\"");
+            r.smelting_input = in_id;
+            r.xp = entry.value("xp", 0.1f);
+            if (r.xp < 0.0f || r.xp > 10.0f) return fail("xp out of range 0..10");
+            int cook = entry.value("cook_ticks", 200);
+            if (cook < 1 || cook > 2000) return fail("cook_ticks out of range 1..2000");
+            r.cook_time = cook;
+            out.push_back(std::move(r));
         } else {
-            return fail("unknown type \"" + type + "\" (expected shaped|shapeless)");
+            return fail("unknown type \"" + type + "\" (expected shaped|shapeless|smelting)");
         }
     }
     if (out.empty()) {
@@ -261,6 +278,13 @@ ModLoadReport ModManager::load_content(const std::string& dir) {
         std::string err;
         if (parse_recipes_json(text, parsed, err)) {
             for (auto& recipe : parsed) {
+                if (recipe.type == RecipeType::Smelting) {
+                    // Furnace recipes route into the smelting override table.
+                    smelting::register_custom_smelt(
+                        recipe.smelting_input, {recipe.output.item, recipe.xp});
+                    ++report.recipes_added;
+                    continue;
+                }
                 bool overridden = RecipeManager::add_or_override(std::move(recipe));
                 if (overridden) ++report.recipes_overridden;
                 else ++report.recipes_added;

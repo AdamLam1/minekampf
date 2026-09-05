@@ -1,0 +1,9 @@
+[
+  {
+    "type": "smelting",
+    "input": "clay",
+    "output": "bricks",
+    "count": 1,
+    "xp": 0.3
+  }
+]

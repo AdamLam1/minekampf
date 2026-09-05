@@ -68,6 +68,48 @@ TEST(ModManagerTest, RejectsStructurallyBrokenDocuments) {
     EXPECT_NE(err.find("count"), std::string::npos);
 }
 
+TEST(ModManagerTest, ParsesSmeltingRecipes) {
+    std::vector<Recipe> out;
+    std::string err;
+    ASSERT_TRUE(ModManager::parse_recipes_json(
+        R"([{"type": "smelting", "input": "iron_ore", "output": "iron_ingot",
+            "count": 2, "xp": 0.9}])",
+        out, err)) << err;
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].type, RecipeType::Smelting);
+    EXPECT_EQ(out[0].smelting_input, static_cast<ItemId>(BLOCK_IRON_ORE));
+    EXPECT_EQ(out[0].output.item, ITEM_IRON_INGOT);
+    EXPECT_EQ(out[0].output.count, 2);
+    EXPECT_FLOAT_EQ(out[0].xp, 0.9f);
+
+    // Unknown input/output and bad xp are rejected.
+    EXPECT_FALSE(ModManager::parse_recipes_json(
+        R"([{"type": "smelting", "input": "no_such_ore", "output": "iron_ingot"}])",
+        out, err));
+    EXPECT_NE(err.find("unknown input"), std::string::npos);
+    EXPECT_FALSE(ModManager::parse_recipes_json(
+        R"([{"type": "smelting", "output": "iron_ingot"}])", out, err));
+    EXPECT_NE(err.find("input"), std::string::npos);
+}
+
+TEST(ModManagerTest, SmeltingRecipesRouteIntoRuntimeTable) {
+    // Registering a custom recipe makes the furnace accept a new input.
+    smelting::register_custom_smelt(ITEM_STONE, {static_cast<ItemId>(BLOCK_GLASS), 0.2f});
+    auto r = smelting::smelt_result(ITEM_STONE);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->output, static_cast<ItemId>(BLOCK_GLASS));
+    EXPECT_FLOAT_EQ(r->xp, 0.2f);
+    // Re-registration with the same input overrides the earlier one.
+    smelting::register_custom_smelt(ITEM_STONE, {static_cast<ItemId>(BLOCK_ICE), 0.5f});
+    r = smelting::smelt_result(ITEM_STONE);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->output, static_cast<ItemId>(BLOCK_ICE));
+    // Built-in recipes still resolve.
+    auto iron = smelting::smelt_result(static_cast<ItemId>(BLOCK_IRON_ORE));
+    ASSERT_TRUE(iron.has_value());
+    EXPECT_EQ(iron->output, ITEM_IRON_INGOT);
+}
+
 TEST(ModManagerTest, NameLookupIsCaseInsensitiveAndCoversBlocks) {
     // Block names map to the block id (drops use the same convention); the
     // pure item "diamond" is a different registry entry.

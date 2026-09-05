@@ -5,6 +5,7 @@
 // directly (tests/test_smelting).
 
 #include <optional>
+#include <vector>
 
 #include "gameplay/item.hpp"
 #include "world/block.hpp"
@@ -19,9 +20,32 @@ struct SmeltResult {
     float xp;
 };
 
+// Data-driven (mod) smelting recipes. Checked before the builtin table, so a
+// mod can add new recipes AND override built-in ones. Registration happens
+// at mod load time; the vector lives for the whole session.
+
+inline std::vector<std::pair<ItemId, SmeltResult>>& custom_smelts() {
+    static std::vector<std::pair<ItemId, SmeltResult>> v;
+    return v;
+}
+
+inline void register_custom_smelt(ItemId input, SmeltResult result) {
+    for (auto& c : custom_smelts()) {
+        if (c.first == input) {
+            c.second = result; // mod overrides builtin/earlier recipe
+            return;
+        }
+    }
+    custom_smelts().emplace_back(input, result);
+}
+
 // Recipe map. Logs of all species smelt into charcoal; ores into ingots
-// (closing the iron-tool chain); sand into glass; meat cooks.
-[[nodiscard]] inline constexpr std::optional<SmeltResult> smelt_result(ItemId input) {
+// (closing the iron-tool chain); sand into glass; meat cooks. Mod recipes
+// take precedence (see register_custom_smelt).
+[[nodiscard]] inline std::optional<SmeltResult> smelt_result(ItemId input) {
+    for (const auto& c : custom_smelts()) {
+        if (c.first == input) return c.second;
+    }
     switch (input) {
         case BLOCK_IRON_ORE: return SmeltResult{ITEM_IRON_INGOT, 0.7f};
         case BLOCK_GOLD_ORE: return SmeltResult{ITEM_GOLD_INGOT, 1.0f};
