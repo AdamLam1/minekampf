@@ -36,7 +36,14 @@ struct BiomeInfo {
     uint8_t min_tree_chance; // 0 = no trees, else ~1/chance per column
 };
 
+// Foliage color multiplier per biome (applied to grass tops, leaves and
+// tall grass in the mesher). Neutral = {1, 1, 1}.
+struct BiomeTint {
+    float r, g, b;
+};
+
 [[nodiscard]] const BiomeInfo& biome_info(Biome b);
+[[nodiscard]] const BiomeTint& biome_tint(Biome b);
 
 // Select a biome from sampled noise parameters (PHASE6 §5.1).
 [[nodiscard]] Biome select_biome(float temperature, float humidity, float continentalness, float ridges);

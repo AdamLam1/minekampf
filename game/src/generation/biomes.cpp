@@ -21,6 +21,26 @@ constexpr std::array<BiomeInfo, static_cast<size_t>(Biome::Count)> BIOMES = {{
 // clang-format on
 } // namespace
 
+// clang-format off
+constexpr std::array<BiomeTint, static_cast<size_t>(Biome::Count)> TINTS = {{
+    {1.00f, 1.00f, 1.00f}, // ocean (unused: no grass)
+    {1.00f, 1.00f, 1.00f}, // beach
+    {1.00f, 1.00f, 1.00f}, // plains (texture authored for plains green)
+    {0.85f, 1.00f, 0.85f}, // forest (deeper, cooler green)
+    {0.95f, 0.85f, 0.65f}, // desert (dry scrub)
+    {1.00f, 0.88f, 0.55f}, // savanna (olive dry grass)
+    {0.80f, 0.92f, 0.90f}, // taiga (cold bluish green)
+    {0.75f, 0.85f, 1.00f}, // snowy (frosty pale green)
+    {0.85f, 0.90f, 0.80f}, // mountains (faded alpine)
+}};
+// clang-format on
+
+const BiomeTint& biome_tint(Biome b) {
+    size_t i = static_cast<size_t>(b);
+    if (i >= TINTS.size()) return TINTS[static_cast<size_t>(Biome::Plains)];
+    return TINTS[i];
+}
+
 const BiomeInfo& biome_info(Biome b) {
     size_t i = static_cast<size_t>(b);
     if (i >= BIOMES.size()) return BIOMES[static_cast<size_t>(Biome::Plains)];

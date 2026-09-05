@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "core/mod_manager.hpp"
 #include "gameplay/crafting.hpp"
+#include "gameplay/smelting.hpp"
 #include "world/block.hpp"
 
 #include <filesystem>

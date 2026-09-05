@@ -1,5 +1,7 @@
 #include "renderer/mesh_builder.hpp"
 
+#include "generation/biomes.hpp"
+
 #include <array>
 
 #include "core/config.hpp"
@@ -104,8 +106,29 @@ constexpr std::array<FaceDef, 6> FACES = {{
     return 255;
 }
 
+// Per-biome foliage tint for grass tops, leaves and tall grass. Inactive
+// when the block/face combination is not tinted.
+struct FoliageTint {
+    bool active = false;
+    float r = 1.0f, g = 1.0f, b = 1.0f;
+};
+
+[[nodiscard]] FoliageTint foliage_tint_for(const Chunk& chunk, BlockPos p, BlockId b,
+                                           Direction dir) {
+    bool tinted = false;
+    if (b == BLOCK_GRASS) tinted = (dir == Direction::Up);
+    else if (b == BLOCK_TALL_GRASS) tinted = true;
+    else if (b == BLOCK_OAK_LEAVES || b == BLOCK_SPRUCE_LEAVES ||
+             b == BLOCK_BIRCH_LEAVES || b == BLOCK_ACACIA_LEAVES)
+        tinted = true;
+    if (!tinted) return {};
+    const BiomeTint& t = biome_tint(chunk.biome_at(p.x & 15, p.z & 15));
+    return {true, t.r, t.g, t.b};
+}
+
 void emit_cross(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, BlockPos p,
-                Tile tile, uint8_t bl, uint8_t sl, const TextureAtlas& atlas, BlockId b) {
+                Tile tile, uint8_t bl, uint8_t sl, const TextureAtlas& atlas, BlockId b,
+                FoliageTint tint = {}) {
     const float fx = static_cast<float>(p.x);
     const float fy = static_cast<float>(p.y);
     const float fz = static_cast<float>(p.z);
@@ -123,6 +146,11 @@ void emit_cross(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, BlockPos
     uint8_t r = 255, g = 255, b_col = 255;
     if (is_water(b)) {
         r = 61; g = 168; b_col = 255;
+    }
+    if (tint.active) {
+        r = static_cast<uint8_t>(r * tint.r);
+        g = static_cast<uint8_t>(g * tint.g);
+        b_col = static_cast<uint8_t>(b_col * tint.b);
     }
 
     auto push = [&](float vx, float vy, float vz, float u, float v) {
@@ -164,7 +192,8 @@ void emit_cross(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, BlockPos
 }
 
 void emit_quad(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, const FaceDef& f, BlockPos p,
-               Tile tile, uint8_t bl, uint8_t sl, const uint8_t (&ao)[4], const TextureAtlas& atlas, BlockId b, bool is_fluid_top) {
+               Tile tile, uint8_t bl, uint8_t sl, const uint8_t (&ao)[4], const TextureAtlas& atlas, BlockId b, bool is_fluid_top,
+               FoliageTint tint = {}) {
     const uint32_t base = static_cast<uint32_t>(verts.size());
     
     uint8_t face_val = static_cast<uint8_t>(f.dir);
@@ -207,7 +236,9 @@ void emit_quad(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, const Fac
         vert.sl = sl;
         vert.ao = ao[k];
         vert.face = face_val;
-        vert.r = 255; vert.g = 255; vert.b = 255;
+        vert.r = static_cast<uint8_t>(255.0f * (tint.active ? tint.r : 1.0f));
+        vert.g = static_cast<uint8_t>(255.0f * (tint.active ? tint.g : 1.0f));
+        vert.b = static_cast<uint8_t>(255.0f * (tint.active ? tint.b : 1.0f));
         vert.a = alpha_for(b);
         verts.push_back(vert);
     }
@@ -233,7 +264,7 @@ void emit_quad(std::vector<Vertex>& verts, std::vector<uint32_t>& idx, const Fac
 void emit_greedy_quads(std::vector<Vertex>& verts, std::vector<uint32_t>& idx,
                        Direction face_dir, BlockPos p, int w, int h,
                        Tile tile, uint8_t bl, uint8_t sl, const uint8_t (&ao)[4],
-                       uint8_t a, const TextureAtlas& atlas) {
+                       uint8_t a, const TextureAtlas& atlas, FoliageTint tint = {}) {
     const auto& f = FACES[static_cast<int>(face_dir)];
     const uint32_t base = static_cast<uint32_t>(verts.size());
 
@@ -262,7 +293,9 @@ void emit_greedy_quads(std::vector<Vertex>& verts, std::vector<uint32_t>& idx,
         vert.sl = sl;
         vert.ao = ao[k];
         vert.face = face_val;
-        vert.r = 255; vert.g = 255; vert.b = 255;
+        vert.r = static_cast<uint8_t>(255.0f * (tint.active ? tint.r : 1.0f));
+        vert.g = static_cast<uint8_t>(255.0f * (tint.active ? tint.g : 1.0f));
+        vert.b = static_cast<uint8_t>(255.0f * (tint.active ? tint.b : 1.0f));
         vert.a = a;
         verts.push_back(vert);
     }
@@ -289,6 +322,7 @@ struct FaceInfo {
     uint8_t bl = 0;
     uint8_t sl = 15;
     uint8_t ao[4] = {3, 3, 3, 3};
+    FoliageTint tint;   // quads do not merge across different tints
     bool needs_mesh = false;
 };
 
@@ -382,6 +416,7 @@ void greedy_pass_direction(std::vector<Vertex>& verts, std::vector<uint32_t>& id
                 info.tile = tile;
                 info.bl = face_bl;
                 info.sl = face_sl;
+                info.tint = foliage_tint_for(*chunk, bp, b, face_dir);
                 info.needs_mesh = true;
                 for (int k = 0; k < 4; ++k) {
                     int cu = static_cast<int>(f.corners[k].u);
@@ -417,7 +452,11 @@ void greedy_pass_direction(std::vector<Vertex>& verts, std::vector<uint32_t>& id
                         next_info.ao[0] != start_info.ao[0] ||
                         next_info.ao[1] != start_info.ao[1] ||
                         next_info.ao[2] != start_info.ao[2] ||
-                        next_info.ao[3] != start_info.ao[3]) {
+                        next_info.ao[3] != start_info.ao[3] ||
+                        next_info.tint.active != start_info.tint.active ||
+                        next_info.tint.r != start_info.tint.r ||
+                        next_info.tint.g != start_info.tint.g ||
+                        next_info.tint.b != start_info.tint.b) {
                         break;
                     }
                     w++;
@@ -439,7 +478,11 @@ void greedy_pass_direction(std::vector<Vertex>& verts, std::vector<uint32_t>& id
                             next_info.ao[0] != start_info.ao[0] ||
                             next_info.ao[1] != start_info.ao[1] ||
                             next_info.ao[2] != start_info.ao[2] ||
-                            next_info.ao[3] != start_info.ao[3]) {
+                            next_info.ao[3] != start_info.ao[3] ||
+                        next_info.tint.active != start_info.tint.active ||
+                        next_info.tint.r != start_info.tint.r ||
+                        next_info.tint.g != start_info.tint.g ||
+                        next_info.tint.b != start_info.tint.b) {
                             ok = false;
                             break;
                         }
@@ -458,7 +501,7 @@ void greedy_pass_direction(std::vector<Vertex>& verts, std::vector<uint32_t>& id
                 // Emit the merged quad!
                 BlockPos bp = get_world_pos(depth, u, v);
                 uint8_t alpha = alpha_for(start_info.b);
-                emit_greedy_quads(verts, idx, face_dir, bp, w, h, start_info.tile, start_info.bl, start_info.sl, start_info.ao, alpha, atlas);
+                emit_greedy_quads(verts, idx, face_dir, bp, w, h, start_info.tile, start_info.bl, start_info.sl, start_info.ao, alpha, atlas, start_info.tint);
             }
         }
     }
@@ -521,7 +564,9 @@ void build_chunk_mesh(const std::array<std::shared_ptr<Chunk>, 9>& cached_chunks
                     auto& verts = is_cutout ? data.opaque_verts : data.trans_verts;
                     auto& idx = is_cutout ? data.opaque_idx : data.trans_idx;
 
-                    bool is_leaf = tile_for_face(b, Direction::Up) == Tile::Leaves;
+                    bool is_leaf = b == BLOCK_OAK_LEAVES || b == BLOCK_SPRUCE_LEAVES ||
+                                   b == BLOCK_BIRCH_LEAVES || b == BLOCK_ACACIA_LEAVES ||
+                                   tile_for_face(b, Direction::Up) == Tile::Leaves;
                     if (!is_full_cube(b) && is_transparent(b) && !is_liquid(b) && !is_leaf) {
                         // Cross-shaped plants (grass, flowers, torches).
                         // NOTE: liquids and leaves are full-scale cubes even
@@ -532,7 +577,8 @@ void build_chunk_mesh(const std::array<std::shared_ptr<Chunk>, 9>& cached_chunks
                         int sec = section_index(world_y);
                         uint8_t bl = chunk->light[sec].get_block_light(lx, local_y(world_y), lz);
                         uint8_t sl = chunk->light[sec].get_sky_light(lx, local_y(world_y), lz);
-                        emit_cross(verts, idx, p, tile, bl, sl, atlas, b);
+                        emit_cross(verts, idx, p, tile, bl, sl, atlas, b,
+                                   foliage_tint_for(*chunk, p, b, Direction::Up));
                         continue;
                     }
 
@@ -571,7 +617,8 @@ void build_chunk_mesh(const std::array<std::shared_ptr<Chunk>, 9>& cached_chunks
                             is_fluid_top = !is_fluid(get_block_cached(cached_chunks, pos, BlockPos{p.x, p.y + 1, p.z}));
                         }
 
-                        emit_quad(verts, idx, f, p, tile, face_bl, face_sl, ao, atlas, b, is_fluid_top);
+                        emit_quad(verts, idx, f, p, tile, face_bl, face_sl, ao, atlas, b,
+                                  is_fluid_top, foliage_tint_for(*chunk, p, b, f.dir));
                     }
                 }
             }
