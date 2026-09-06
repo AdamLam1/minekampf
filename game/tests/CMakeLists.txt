@@ -6,6 +6,8 @@ add_executable(minekampf_tests
     test_raycast.cpp
     test_network.cpp
     test_network_frames.cpp
+    test_multiplayer_protocol.cpp
+    test_chunk_codec.cpp
     test_structures.cpp
     test_inventory.cpp
     test_crafting.cpp

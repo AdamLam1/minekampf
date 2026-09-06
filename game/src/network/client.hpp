@@ -27,6 +27,9 @@ public:
     void set_packet_received_handler(PacketReceivedHandler handler) { on_packet_ = std::move(handler); }
 
 private:
+    void handle_connected(std::error_code ec,
+                          std::shared_ptr<asio::ip::tcp::socket> socket_ptr);
+
     asio::io_context& io_context_;
     asio::ip::tcp::resolver resolver_;
     std::shared_ptr<Connection> connection_;

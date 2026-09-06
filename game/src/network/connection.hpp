@@ -38,9 +38,6 @@ public:
     void set_packet_handler(PacketHandler handler) { packet_handler_ = std::move(handler); }
     void set_disconnect_handler(DisconnectHandler handler) { disconnect_handler_ = std::move(handler); }
 
-    [[nodiscard]] ConnectionState state() const { return state_; }
-    void set_state(ConnectionState state) { state_ = state; }
-
     [[nodiscard]] int compression_threshold() const { return compression_threshold_; }
     void set_compression_threshold(int threshold) { compression_threshold_ = threshold; }
 
@@ -51,10 +48,7 @@ private:
 
     void do_write();
 
-    std::shared_ptr<Packet> create_packet(int32_t id);
-
     asio::ip::tcp::socket socket_;
-    ConnectionState state_{ConnectionState::HANDSHAKE};
     int compression_threshold_{-1};
 
     PacketBuffer read_buffer_;

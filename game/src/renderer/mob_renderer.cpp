@@ -99,6 +99,10 @@ bool MobRenderer::init() {
     // is safe to repeat — it replaces previous customs.
     MobRegistry& registry = MobRegistry::instance();
     registry.scan_directory("assets/models/mobs");
+    // Synthetic species for remote players (procedural humanoid rig, never
+    // spawned ambient); registered after the scan so unit tests of the
+    // registry see built-ins + customs only.
+    registry.ensure_player_species();
     const size_t species_count = registry.size();
 
     // Built-in fallback palettes (order matches MobType: zombie, skeleton,
@@ -140,8 +144,16 @@ bool MobRenderer::init() {
         entries_[i].scale = spec->scale;
         entries_[i].quadruped = spec->quadruped;
         entries_[i].zombie_arms = spec->zombie_arms;
-        if (i >= 4) fallback_palette(spec->name, entries_[i].col_body, entries_[i].col_head,
-                                     entries_[i].col_limb);
+        if (spec->name == "player") {
+            // Remote players: cyan shirt, skin-tone head, denim limbs — reads
+            // as a person next to the mob palettes without a texture asset.
+            entries_[i].col_body = {0.16f, 0.62f, 0.66f};
+            entries_[i].col_head = {0.87f, 0.66f, 0.48f};
+            entries_[i].col_limb = {0.20f, 0.28f, 0.55f};
+        } else if (i >= 4) {
+            fallback_palette(spec->name, entries_[i].col_body, entries_[i].col_head,
+                             entries_[i].col_limb);
+        }
 
         std::string error;
         auto geo = GeoModel::load_from_file(spec->model_path, &error);

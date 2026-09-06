@@ -17,6 +17,7 @@
 #include "gameplay/mining.hpp"
 #include "gameplay/smelting.hpp"
 #include "gameplay/entity.hpp"
+#include "gameplay/remote_player.hpp"
 #include "gameplay/tick_system.hpp"
 #include "generation/world_generator.hpp"
 #include "gameplay/entity.hpp"
@@ -36,10 +37,15 @@
 
 namespace mc {
 
+class ServerSession;
+class ClientSession;
+
 enum class GameState {
     MainMenu,
     WorldSelect,
     CreateWorld,
+    MultiplayerMenu,
+    MultiplayerConnect,
     Loading,
     Playing,
     Paused,
@@ -64,6 +70,8 @@ struct GenResult {
 // dual-loop: fixed 20Hz server ticks + variable-rate rendering.
 class Game {
 public:
+    Game();
+    ~Game();
     bool init();
     void shutdown();
     void run();
@@ -87,6 +95,42 @@ public:
     // World management flow.
     bool start_game(const WorldMeta& meta);
     void return_to_menu();
+
+    // -- Multiplayer (listen server on the host, remote world on a client;
+    //    implementation lives in network/server_session.{hpp,cpp} and
+    //    network/client_session.{hpp,cpp}, which call this narrow surface) --
+    bool mp_host_start(uint16_t port);
+    void mp_host_stop();
+    // CLI/menu entry: arm hosting so the server comes up with the next
+    // world load (start_game), never serving the menu panorama world.
+    void mp_host_after_load(uint16_t port) { hosting_intent_ = true; mp_host_port_ = port; }
+    bool mp_client_join(const std::string& host, uint16_t port, const std::string& username);
+    void mp_client_leave();
+    [[nodiscard]] bool is_multiplayer_host() const { return server_session_ != nullptr; }
+    [[nodiscard]] bool is_multiplayer_client() const { return client_session_ != nullptr; }
+    [[nodiscard]] bool is_multiplayer() const { return server_session_ || client_session_; }
+
+    // Session → Game surface (main thread only).
+    World* mp_world();
+    [[nodiscard]] const Player& mp_host_player() const { return player_; }
+    [[nodiscard]] float mp_time_of_day() const { return time_of_day_; }
+    void mp_set_time_of_day(float t) { time_of_day_ = t; }
+    [[nodiscard]] GameMode mp_game_mode() const { return player_.mode; }
+    bool mp_apply_remote_break(const BlockPos& pos, const Vec3& player_pos, std::string* err);
+    bool mp_apply_remote_place(const BlockPos& pos, BlockId block, const Vec3& player_pos,
+                               std::string* err);
+    void mp_chat_from_remote(const std::string& from, const std::string& text);
+    void mp_client_disconnected(const std::string& reason);
+    // Client-side packet applications (client_session.cpp).
+    void mp_client_accepted(const net::LoginAcceptedPacket& acc);
+    void mp_client_chunk(const net::ChunkDataPacket& pkt);
+    void mp_client_blocks(const net::BlockUpdatesPacket& pkt);
+    void mp_client_spawn_player(const net::SpawnPlayerPacket& pkt);
+    void mp_client_despawn_player(const net::DespawnPlayerPacket& pkt);
+    void mp_client_states(const net::PlayerStatesPacket& pkt);
+    // Chat line submitted locally (chat UI / automation): routes to the
+    // network session when connected, otherwise the single-player path.
+    void submit_chat_line(std::string text);
 
 private:
     void process_input(float dt);
@@ -253,6 +297,29 @@ private:
     std::string chat_input_;
     bool chat_active_ = false;
     bool just_opened_chat_ = false;
+
+    // -- Multiplayer state (see network/ sessions) --
+    std::unique_ptr<ServerSession> server_session_;
+    std::unique_ptr<ClientSession> client_session_;
+    std::vector<RemotePlayer> remote_players_; // everyone but the local player
+    int32_t my_player_id_ = 0;                 // 0 = host; client id from login
+    bool hosting_intent_ = false;              // WorldSelect → host after load
+    uint16_t mp_host_port_ = net::MP_DEFAULT_PORT;
+    ChunkPos last_requested_center_{INT32_MIN, INT32_MIN};
+    std::vector<Mob> mob_render_list_;         // mobs_ + remote players (render scratch)
+    // Join screen fields
+    std::string mp_join_host_;
+    std::string mp_join_port_ = "25590";
+    std::string mp_join_name_;
+    int mp_join_active_field_ = 0; // 0=host 1=port 2=nick
+    bool mp_return_to_menu_pending_ = false; // deferred world teardown (mid-tick disconnects)
+
+    void draw_multiplayer_menu();
+    void draw_multiplayer_connect();
+    void tick_multiplayer_host();
+    void tick_multiplayer_client();
+    void refresh_remote_players_host();
+    [[nodiscard]] const Vec3* mp_nearest_player_pos(const Vec3& from) const;
 
     // -- Survival mining state (progressive block breaking) --
     BlockPos mining_pos_{0, 0, 0};

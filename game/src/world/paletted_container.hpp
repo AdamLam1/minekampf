@@ -61,6 +61,17 @@ public:
         data_.assign(word_count_for(bits_), 0);
     }
 
+    // -- Codec access (network chunk streaming; save system uses NBT) --
+    [[nodiscard]] const std::vector<BlockId>& palette() const { return palette_; }
+    [[nodiscard]] const std::vector<uint64_t>& packed_data() const { return data_; }
+    // Bulk-restore a serialized container. Input must come from our codec
+    // (bits 4..8, palette size <= 1<<bits, data sized for word_count_for).
+    void load_packed(int bits, std::vector<BlockId> palette, std::vector<uint64_t> data) {
+        bits_ = bits;
+        palette_ = std::move(palette);
+        data_ = std::move(data);
+    }
+
 private:
     static int word_count_for(int bits) {
         return static_cast<int>((SECTION_VOLUME * static_cast<std::size_t>(bits) + 63) / 64);

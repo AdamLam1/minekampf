@@ -27,6 +27,7 @@ void Connection::send_packet(const Packet& packet) {
     packet.serialize(buf);
 
     PacketBuffer final_buf;
+    bool start_write = false;
     
     // Compression is omitted for simplicity in this initial iteration unless threshold >= 0
     if (compression_threshold_ >= 0) {
@@ -60,10 +61,17 @@ void Connection::send_packet(const Packet& packet) {
         final_buf.write_bytes(buf.data());
     }
 
-    std::lock_guard<std::mutex> lock(write_mutex_);
-    write_queue_.push(final_buf.data());
-    if (!is_writing_) {
-        is_writing_ = true;
+    {
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        write_queue_.push(final_buf.data());
+        if (!is_writing_) {
+            is_writing_ = true;
+            start_write = true;
+        }
+    }
+    // do_write() takes write_mutex_ itself — it must run with our lock
+    // released (std::mutex is non-recursive; relocking here threw EDEADLK).
+    if (start_write) {
         do_write();
     }
 }
@@ -80,9 +88,21 @@ void Connection::do_write() {
     asio::async_write(socket_, asio::buffer(data),
         [this, self](std::error_code ec, std::size_t /*length*/) {
             if (!ec) {
-                std::lock_guard<std::mutex> lock2(write_mutex_);
-                write_queue_.pop();
-                do_write(); // Call next
+                bool start_next = false;
+                {
+                    std::lock_guard<std::mutex> lock2(write_mutex_);
+                    write_queue_.pop();
+                    if (!write_queue_.empty()) {
+                        start_next = true; // is_writing_ stays claimed
+                    } else {
+                        is_writing_ = false;
+                    }
+                }
+                // do_write() takes write_mutex_ itself — it must not run
+                // while we still hold the lock (std::mutex is non-recursive).
+                if (start_next) {
+                    do_write();
+                }
             } else {
                 stop();
             }
@@ -138,21 +158,6 @@ void Connection::do_read_body(int32_t length) {
         });
 }
 
-std::shared_ptr<Packet> Connection::create_packet(int32_t id) {
-    if (state_ == ConnectionState::HANDSHAKE) {
-        if (id == 0x00) return std::make_shared<HandshakePacket>();
-    } else if (state_ == ConnectionState::LOGIN) {
-        if (id == 0x00) return std::make_shared<LoginStartPacket>();
-        if (id == 0x02) return std::make_shared<LoginSuccessPacket>();
-    } else if (state_ == ConnectionState::PLAY) {
-        if (id == 0x1E) return std::make_shared<PlayerPositionPacket>();
-        if (id == 0x25) return std::make_shared<ChunkDataPacket>();
-        if (id == 0x44) return std::make_shared<BlockUpdatePacket>();
-        if (id == 0x21) return std::make_shared<KeepAlivePacket>();
-    }
-    return nullptr;
-}
-
 std::optional<std::pair<int32_t, PacketBuffer>> decode_frame(const std::vector<uint8_t>& frame,
                                                              int compression_threshold) {
     try {
@@ -190,7 +195,7 @@ void Connection::handle_packet() {
     const int32_t id = parsed->first;
     PacketBuffer& body = parsed->second;
 
-    auto pkt = create_packet(id);
+    auto pkt = make_packet(id);
     if (pkt) {
         try {
             pkt->deserialize(body);
@@ -202,8 +207,31 @@ void Connection::handle_packet() {
             stop();
         }
     } else {
-        // Unknown packet, ignore or log
+        // Unknown packet id: ignore (forward compatibility).
     }
+}
+
+std::shared_ptr<Packet> make_packet(int32_t id) {
+    switch (static_cast<PacketId>(id)) {
+        case PacketId::Handshake: return std::make_shared<HandshakePacket>();
+        case PacketId::LoginStart: return std::make_shared<LoginStartPacket>();
+        case PacketId::ClientReady: return std::make_shared<ClientReadyPacket>();
+        case PacketId::PlayerMove: return std::make_shared<PlayerMovePacket>();
+        case PacketId::PlayerAction: return std::make_shared<PlayerActionPacket>();
+        case PacketId::ChatMessage: return std::make_shared<ChatMessagePacket>();
+        case PacketId::RequestChunks: return std::make_shared<RequestChunksPacket>();
+        case PacketId::LoginAccepted: return std::make_shared<LoginAcceptedPacket>();
+        case PacketId::ChunkData: return std::make_shared<ChunkDataPacket>();
+        case PacketId::BlockUpdates: return std::make_shared<BlockUpdatesPacket>();
+        case PacketId::SpawnPlayer: return std::make_shared<SpawnPlayerPacket>();
+        case PacketId::DespawnPlayer: return std::make_shared<DespawnPlayerPacket>();
+        case PacketId::PlayerStates: return std::make_shared<PlayerStatesPacket>();
+        case PacketId::TimeSync: return std::make_shared<TimeSyncPacket>();
+        case PacketId::ChatBroadcast: return std::make_shared<ChatBroadcastPacket>();
+        case PacketId::KeepAlive: return std::make_shared<KeepAlivePacket>();
+        case PacketId::Disconnect: return std::make_shared<DisconnectPacket>();
+    }
+    return nullptr;
 }
 
 } // namespace mc::net

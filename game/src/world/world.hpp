@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,6 +23,12 @@ class World {
 public:
     uint64_t seed = 0;
     DimensionId dimension_id = DimensionId::Overworld;
+
+    // Optional main-thread hook invoked after every successful set_block.
+    // The multiplayer host uses it to broadcast world changes so that fluids,
+    // redstone and commands sync exactly like player edits (network/world
+    // decoupling: World never depends on net types).
+    std::function<void(BlockPos, BlockId)> on_block_changed;
 
     World() = default;
     explicit World(uint64_t s, DimensionId dim = DimensionId::Overworld) : seed(s), dimension_id(dim) {}
@@ -82,6 +89,7 @@ public:
         dirty_chunks_.insert(cp);
         // Mark neighbors dirty if on the border (their mesh depends on us).
         mark_border_dirty(p);
+        if (on_block_changed) on_block_changed(p, b);
         return true;
     }
 

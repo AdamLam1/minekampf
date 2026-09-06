@@ -11,10 +11,13 @@ void Server::start() {
 
 void Server::stop() {
     acceptor_.close();
-    for (auto& conn : connections_) {
+    // Copy first: Connection::stop() fires the disconnect handler, which
+    // erases from connections_ — mutating while iterating would be UB.
+    auto conns = connections_;
+    connections_.clear();
+    for (auto& conn : conns) {
         conn->stop();
     }
-    connections_.clear();
 }
 
 void Server::broadcast(const Packet& packet) {

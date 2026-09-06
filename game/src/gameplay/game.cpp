@@ -32,8 +32,30 @@
 #include "core/profiler.hpp"
 #include "core/mod_manager.hpp"
 #include "gameplay/combat.hpp"
+#include "network/server_session.hpp"
+#include "network/client_session.hpp"
+#include "network/chunk_codec.hpp"
 
 namespace mc {
+
+using net::MP_DEFAULT_PORT;
+using net::PlayerActionType;
+using net::pack_block_pos;
+using net::unpack_block_x;
+using net::unpack_block_y;
+using net::unpack_block_z;
+using net::PlayerMovePacket;
+using net::PLAYER_FLAG_ON_GROUND;
+using net::PLAYER_FLAG_SNEAKING;
+using net::PLAYER_FLAG_SPRINTING;
+using net::PLAYER_FLAG_SWINGING;
+
+
+// Out-of-line default ctor/dtor: the multiplayer session unique_ptrs hold
+// forward-declared types in game.hpp, so their deleters must materialize in
+// this TU (where network/server_session.hpp etc. are included).
+Game::Game() = default;
+Game::~Game() = default;
 
 namespace {
 // Enabled with MINEKAMPF_AI_DIAG=1; routed to the game log.
@@ -260,6 +282,18 @@ bool Game::start_game(const WorldMeta& meta) {
     worlds_[DimensionId::Nether] = std::make_unique<World>(meta.seed, DimensionId::Nether);
     worlds_[DimensionId::End] = std::make_unique<World>(meta.seed, DimensionId::End);
 
+    // Multiplayer: broadcast every world mutation while hosting (the hook
+    // no-ops on clients / singleplayer because the session is null-checked
+    // inside). Set for all three dimensions so Nether edits sync too.
+    for (auto& [id, world] : worlds_) {
+        world->on_block_changed = [this](BlockPos p, BlockId b) {
+            if (server_session_) {
+                server_session_->record_block_change(pack_block_pos(p.x, p.y, p.z),
+                                                     static_cast<int32_t>(b));
+            }
+        };
+    }
+
     generators_[DimensionId::Overworld] = std::make_unique<WorldGenerator>(meta.seed);
     generators_[DimensionId::Nether] = std::make_unique<WorldGenerator>(meta.seed);
     generators_[DimensionId::End] = std::make_unique<WorldGenerator>(meta.seed);
@@ -392,6 +426,16 @@ bool Game::start_game(const WorldMeta& meta) {
     state_ = GameState::Loading;
     glfwSetInputMode(renderer_.window(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     MC_LOG_INFO("Starting game: {} seed={} mode={}", meta.name, meta.seed, WorldManager::game_mode_str(meta.game_mode));
+
+    // Hosting was requested from the multiplayer menu: bring the listen
+    // server up once the world session exists (clients stream chunks as they
+    // load; the loading screen drains them the same way singleplayer does).
+    if (hosting_intent_) {
+        hosting_intent_ = false;
+        if (!mp_host_start(mp_host_port_)) {
+            add_chat_message("Nie udalo sie uruchomic serwera (port zajety?)");
+        }
+    }
     return true;
 }
 
@@ -426,6 +470,18 @@ void Game::shutdown_world() {
 }
 
 void Game::return_to_menu() {
+    // Teardown any multiplayer session before dropping the world.
+    if (server_session_) {
+        server_session_->shutdown_with_message("Host zamknal swiat");
+        server_session_.reset();
+    }
+    if (client_session_) {
+        client_session_->disconnect();
+        client_session_.reset();
+    }
+    remote_players_.clear();
+    my_player_id_ = 0;
+    last_requested_center_ = ChunkPos{INT32_MIN, INT32_MIN};
     shutdown_world();
     state_ = GameState::MainMenu;
     glfwSetInputMode(renderer_.window(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -497,6 +553,14 @@ void Game::generate_initial_chunks() {
 }
 
 void Game::shutdown() {
+    if (server_session_) {
+        server_session_->shutdown_with_message("Serwer zostaje zamkniety");
+        server_session_.reset();
+    }
+    if (client_session_) {
+        client_session_->disconnect();
+        client_session_.reset();
+    }
     shutdown_world();
     pool_.shutdown();
     automation_.stop();
@@ -535,10 +599,16 @@ void Game::finish_frame() {
 
 void Game::run() {
     while (running_ && !renderer_.should_close()) {
+        if (mp_return_to_menu_pending_) {
+            mp_return_to_menu_pending_ = false;
+            return_to_menu();
+        }
         switch (state_) {
             case GameState::MainMenu:    draw_main_menu();    break;
             case GameState::WorldSelect: draw_world_select(); break;
             case GameState::CreateWorld: draw_create_world(); break;
+            case GameState::MultiplayerMenu:    draw_multiplayer_menu();    break;
+            case GameState::MultiplayerConnect: draw_multiplayer_connect(); break;
             case GameState::Loading:     run_loading();       break;
             case GameState::Playing:     run_game();          break;
             case GameState::Paused:      run_paused();        break;
@@ -669,19 +739,23 @@ void Game::draw_main_menu() {
         draw_settings_panel();
     } else {
         // Buttons
-        float btn_w = 320, btn_h = 44, btn_y = sh * 0.36f, spacing = 56;
+        float btn_w = 320, btn_h = 44, btn_y = sh * 0.32f, spacing = 56;
         if (ui_.button("Singleplayer", cx - btn_w * 0.5f, btn_y, btn_w, btn_h, 2.0f)) {
             state_ = GameState::WorldSelect;
             world_list_ = WorldManager::list_worlds();
             world_sel_index_ = world_list_.empty() ? -1 : 0;
             return;
         }
-        if (ui_.button("Opcje", cx - btn_w * 0.5f, btn_y + spacing, btn_w, btn_h, 2.0f)) {
+        if (ui_.button("Multiplayer", cx - btn_w * 0.5f, btn_y + spacing, btn_w, btn_h, 2.0f)) {
+            state_ = GameState::MultiplayerMenu;
+            return;
+        }
+        if (ui_.button("Opcje", cx - btn_w * 0.5f, btn_y + spacing * 2, btn_w, btn_h, 2.0f)) {
             settings_open_ = true;
             settings_tab_ = 0;
             return;
         }
-        if (ui_.button("Wyjdź", cx - btn_w * 0.5f, btn_y + spacing * 2, btn_w, btn_h, 2.0f)) {
+        if (ui_.button("Wyjdź", cx - btn_w * 0.5f, btn_y + spacing * 3, btn_w, btn_h, 2.0f)) {
             running_ = false;
         }
     }
@@ -1000,6 +1074,28 @@ void Game::run_loading() {
         automation_.update(*this);
         drain_gen_results();
 
+        // Multiplayer client: chunks arrive as packets instead of the thread
+        // pool. Re-request periodically because the host queues only the
+        // chunks it had loaded when a request landed (host may still be
+        // loading its own terrain).
+        if (client_session_) {
+            client_session_->drain_events();
+            static int re_request_timer = 0;
+            if (++re_request_timer >= 40) {
+                re_request_timer = 0;
+                int px = static_cast<int>(std::floor(player_.pos.x));
+                int pz = static_cast<int>(std::floor(player_.pos.z));
+                int cx = px < 0 ? (px - (CHUNK_SIZE - 1)) / CHUNK_SIZE : px / CHUNK_SIZE;
+                int cz = pz < 0 ? (pz - (CHUNK_SIZE - 1)) / CHUNK_SIZE : pz / CHUNK_SIZE;
+                client_session_->send_request_chunks(cx, cz, render_distance_);
+            }
+        }
+        if (mp_return_to_menu_pending_) {
+            mp_return_to_menu_pending_ = false;
+            return_to_menu();
+            return;
+        }
+
         // Update loading count.
         if (worlds_.count(DimensionId::Overworld)) {
             loading_done_chunks_ = static_cast<int>(worlds_[DimensionId::Overworld]->loaded_count());
@@ -1043,8 +1139,26 @@ void Game::run_loading() {
             finish_frame();
         }
 
+        // Stall guard for multiplayer clients: if the host cannot satisfy the
+        // full request (different render distance, unloaded region), enter the
+        // world after a quiet window instead of spinning forever. update_chunks
+        // keeps requesting as the player moves.
+        static std::chrono::steady_clock::time_point last_progress_time =
+            std::chrono::steady_clock::now();
+        static int last_seen_count = -1;
+        if (client_session_) {
+            if (loading_done_chunks_ != last_seen_count) {
+                last_seen_count = loading_done_chunks_;
+                last_progress_time = std::chrono::steady_clock::now();
+            }
+        }
+
         // Check completion.
-        if (loading_done_chunks_ >= loading_total_chunks_) {
+        bool mp_stalled = client_session_ && loading_done_chunks_ > 0 &&
+                          std::chrono::duration_cast<std::chrono::seconds>(
+                              std::chrono::steady_clock::now() - last_progress_time)
+                                  .count() >= 5;
+        if (loading_done_chunks_ >= loading_total_chunks_ || mp_stalled) {
             MC_LOG_INFO("Loading complete: {}/{} chunks, entering Playing.", loading_done_chunks_, loading_total_chunks_);
             state_ = GameState::Playing;
             if (screenshot_wait_ticks_ >= 0) {
@@ -1142,6 +1256,12 @@ void Game::run_game() {
             else mspt_ = mspt_ * 0.9 + tick_ms * 0.1;
         });
 
+        if (mp_return_to_menu_pending_) {
+            mp_return_to_menu_pending_ = false;
+            return_to_menu();
+            return;
+        }
+
         time_of_day_ = std::fmod(time_of_day_ + dt / 480.0f, 1.0f);
         renderer_.set_sky_brightness(day_brightness(time_of_day_));
 
@@ -1182,9 +1302,34 @@ void Game::run_game() {
 // =================================================================
 
 void Game::run_paused() {
+    // Multiplayer: the host's pause menu must NOT freeze the simulation for
+    // everyone else, so the tick loop keeps running here (without local
+    // input — the menu owns the keyboard).
+    FixedTimestepLoop paused_tick_loop;
     while (running_ && !renderer_.should_close() && state_ == GameState::Paused) {
         renderer_.poll_events();
         automation_.update(*this);
+
+        if (is_multiplayer()) {
+            if (server_session_) server_session_->drain_events();
+            if (client_session_) client_session_->drain_events();
+            last_input_ = PlayerInput{}; // menu owns the keyboard while paused
+            paused_tick_loop.update([this] {
+                double tick_start = glfwGetTime();
+                tick();
+                double tick_end = glfwGetTime();
+                double tick_ms = (tick_end - tick_start) * 1000.0;
+                if (mspt_ == 0.0) mspt_ = tick_ms;
+                else mspt_ = mspt_ * 0.9 + tick_ms * 0.1;
+                time_of_day_ = std::fmod(time_of_day_ + TICK_INTERVAL_SEC / 480.0f, 1.0f);
+            });
+            build_dirty_meshes(2);
+            if (mp_return_to_menu_pending_) {
+                mp_return_to_menu_pending_ = false;
+                return_to_menu();
+                return;
+            }
+        }
 
         // ESC closes the settings overlay first; otherwise it resumes the game
         // (pause menu toggles, like in most sandbox games). The resume only
@@ -1311,6 +1456,23 @@ void Game::tick() {
             msg.time_left -= 0.05f; // 20 ticks per second = 0.05s per tick
         }
     }
+
+    // Multiplayer: absorb everything the wire delivered since the last tick
+    // before any simulation reads world/player state.
+    if (server_session_) {
+        server_session_->drain_events();
+        refresh_remote_players_host();
+    }
+    if (client_session_) {
+        client_session_->drain_events();
+    }
+    if (mp_return_to_menu_pending_) {
+        mp_return_to_menu_pending_ = false;
+        return_to_menu();
+        Profiler::get().end_section(ProfileSection::TotalTick);
+        return;
+    }
+
     World& w = *worlds_[current_dimension_];
 
     {
@@ -1427,11 +1589,11 @@ void Game::tick() {
             player_.velocity = Vec3(0, 0, 0);
         }
     }
-    if (current_tick_ % 20 == 0) {
+    if (current_tick_ % 20 == 0 && !client_session_) {
         ProfileScope ps(ProfileSection::RandomTicks);
         ticks_.random_ticks(w, rng_);
     }
-    if (current_tick_ % 4 == 0) {
+    if (current_tick_ % 4 == 0 && !client_session_) {
         ProfileScope ps(ProfileSection::FluidProcessing);
         ticks_.process_fluids(w, current_tick_, rng_);
     }
@@ -1522,7 +1684,10 @@ void Game::tick() {
     {
         ProfileScope ps(ProfileSection::MobSpawning);
         // Refresh per-mob player targeting (pointer must stay current every
-        // tick; callbacks are bound once per mob lifetime).
+        // tick; callbacks are bound once per mob lifetime). Multiplayer MVP:
+        // mobs still target only the host player — the attack callback is
+        // hard-wired to the host, so letting them chase clients would damage
+        // the wrong victim. Per-victim routing lands with mob snapshots.
         for (auto& m : mobs_) {
             m.target_player_pos = &player_.pos;
             if (!m.attack_player) {
@@ -1541,10 +1706,25 @@ void Game::tick() {
                 };
             }
         }
-        mob_spawner_.tick(w, mobs_, rng_, current_tick_, {player_.pos}, time_of_day_);
-        tick_projectiles();
-        tick_furnaces();
-        if (current_tick_ % 100 == 0) purge_invalid_furnaces();
+        if (client_session_) {
+            // Clients don't simulate actors: the mob spawner (which also ticks
+            // every mob) runs host-side only; snapshots stream in a later
+            // phase.
+        } else if (remote_players_.empty()) {
+            mob_spawner_.tick(w, mobs_, rng_, current_tick_, {player_.pos}, time_of_day_);
+            tick_projectiles();
+            tick_furnaces();
+            if (current_tick_ % 100 == 0) purge_invalid_furnaces();
+        } else {
+            std::vector<Vec3> spawn_positions;
+            spawn_positions.reserve(remote_players_.size() + 1);
+            spawn_positions.push_back(player_.pos);
+            for (const auto& rp : remote_players_) spawn_positions.push_back(rp.pos);
+            mob_spawner_.tick(w, mobs_, rng_, current_tick_, spawn_positions, time_of_day_);
+            tick_projectiles();
+            tick_furnaces();
+            if (current_tick_ % 100 == 0) purge_invalid_furnaces();
+        }
     }
 
     {
@@ -1553,7 +1733,9 @@ void Game::tick() {
         update_chunks();
     }
     
-    // Portal teleport logic
+    // Portal teleport logic (host/singleplayer only: dimension sync for
+    // clients is a later phase, so the client ignores portals entirely).
+    if (!client_session_) {
     if (portal_cooldown_ > 0.0f) {
         portal_cooldown_ -= static_cast<float>(TICK_INTERVAL_SEC);
     } else {
@@ -1578,7 +1760,8 @@ void Game::tick() {
             MC_LOG_INFO("Teleported to dimension {}", static_cast<int>(next_dim));
         }
     }
-    
+    }
+
     {
         ProfileScope ps(ProfileSection::Autosave);
         if (storage_ && current_tick_ % 6000 == 0) {
@@ -1603,6 +1786,15 @@ void Game::tick() {
             }
             storage_->save_furnaces(fsave);
         }
+    }
+
+    // Multiplayer tick-end: host broadcasts (chunk stream, block batch,
+    // player states, time); client reports its own position.
+    if (server_session_) {
+        tick_multiplayer_host();
+    }
+    if (client_session_) {
+        tick_multiplayer_client();
     }
 
     Profiler::get().end_section(ProfileSection::TotalTick);
@@ -1665,9 +1857,20 @@ void Game::render(float alpha, bool present_after) {
     renderer_.set_underwater(eye_in_water);
 
     renderer_.begin_frame(camera_);
-    renderer_.set_shadow_casters(&mobs_, static_cast<float>(glfwGetTime()));
+    // Multiplayer: remote players render through the same mob rig pipeline
+    // (synthetic "player" species). Only rebuild the merged list when needed.
+    const std::vector<Mob>* mob_list = &mobs_;
+    if (is_multiplayer() && !remote_players_.empty()) {
+        mob_render_list_ = mobs_;
+        for (const auto& rp : remote_players_) {
+            if (!rp.visible) continue;
+            mob_render_list_.push_back(rp.to_render_mob(alpha));
+        }
+        mob_list = &mob_render_list_;
+    }
+    renderer_.set_shadow_casters(mob_list, static_cast<float>(glfwGetTime()));
     renderer_.render_opaque(camera_);
-    renderer_.render_mobs(camera_, mobs_, static_cast<float>(glfwGetTime()));
+    renderer_.render_mobs(camera_, *mob_list, static_cast<float>(glfwGetTime()));
     renderer_.draw_projectiles(camera_, projectiles_);
 
     if (state_ == GameState::Playing) {
@@ -1735,6 +1938,17 @@ void Game::update_chunks() {
     ChunkPos pc = chunk_from_block(BlockPos(static_cast<int>(std::floor(player_.pos.x)), 0,
                                            static_cast<int>(std::floor(player_.pos.z))));
     int rd = render_distance_;
+
+    // Multiplayer client: the world is streamed from the host. Track chunk
+    // crossings and re-request the disc around the new center.
+    if (client_session_) {
+        if (pc != last_requested_center_) {
+            last_requested_center_ = pc;
+            client_session_->send_request_chunks(pc.x, pc.z, rd);
+        }
+        return;
+    }
+
     World& w = *worlds_[current_dimension_];
     DimensionId dim = current_dimension_;
 
@@ -1921,7 +2135,17 @@ void Game::handle_clicks() {
             }
 
             if (mining_progress_ >= 1.0f) {
-                if (interact_break(w, player_, reach)) {
+                auto break_hit = interact_break(w, player_, reach);
+                if (break_hit) {
+                    // Multiplayer: the break already applied locally
+                    // (prediction); the host re-applies it authoritatively and
+                    // broadcasts the result to everyone else.
+                    if (client_session_) {
+                        client_session_->send_action(PlayerActionType::BreakBlock,
+                                                     break_hit->block_pos.x,
+                                                     break_hit->block_pos.y,
+                                                     break_hit->block_pos.z, 0);
+                    }
                     player_.is_swinging = true;
                     redstone_.on_block_changed(w, target);
                     survival::add_exhaustion(player_, survival::EXHAUSTION_MINE_BLOCK);
@@ -2049,6 +2273,11 @@ void Game::handle_clicks() {
                 player_.is_swinging = true;
                 if (hit) {
                     BlockPos placed = hit->block_pos + offset(hit->face);
+                    if (client_session_) {
+                        client_session_->send_action(PlayerActionType::PlaceBlock,
+                                                     placed.x, placed.y, placed.z,
+                                                     static_cast<int32_t>(held.item));
+                    }
                     if (held.item == BLOCK_FURNACE) {
                         FurnaceKey key = furnace_key_from_block(placed);
                         furnaces_[key]; // create empty state on placement
@@ -2369,8 +2598,7 @@ void Game::key_callback(GLFWwindow* w, int key, int scancode, int action, int mo
                 g->chat_active_ = false;
             } else if (key == GLFW_KEY_ENTER) {
                 if (!g->chat_input_.empty()) {
-                    g->add_chat_message("<Player> " + g->chat_input_);
-                    g->execute_command(g->chat_input_);
+                    g->submit_chat_line(g->chat_input_);
                     g->chat_input_.clear();
                 }
                 g->chat_active_ = false;
@@ -2554,12 +2782,53 @@ std::string Game::automation_state_json() const {
         case GameState::MainMenu:    o << "main_menu"; break;
         case GameState::WorldSelect: o << "world_select"; break;
         case GameState::CreateWorld: o << "create_world"; break;
+        case GameState::MultiplayerMenu:    o << "mp_menu"; break;
+        case GameState::MultiplayerConnect: o << "mp_connect"; break;
         case GameState::Loading:     o << "loading"; break;
         case GameState::Playing:     o << "playing"; break;
         case GameState::Paused:      o << "paused"; break;
         case GameState::Inventory:   o << "inventory"; break;
     }
     o << "\",\"tick\":" << current_tick_;
+    if (is_multiplayer()) {
+        o << ",\"mp\":true,\"role\":\"" << (is_multiplayer_host() ? "host" : "client") << "\"";
+        o << ",\"mp_players\":" << remote_players_.size() + 1;
+        o << ",\"my_player_id\":" << my_player_id_;
+        if (client_session_) {
+            o << ",\"mp_status\":\"" << json_escape(client_session_->status()) << "\"";
+        }
+        if (server_session_) {
+            o << ",\"mp_port\":" << server_session_->port();
+        }
+        // QA hook: remote players as seen by this instance (latest snapshots
+        // on the client, host registry on the host).
+        o << ",\"mp_remote\":[";
+        {
+            bool first_rp = true;
+            for (const auto& rp : remote_players_) {
+                if (!first_rp) o << ",";
+                first_rp = false;
+                o << "{\"id\":" << rp.id << ",\"name\":\"" << json_escape(rp.name)
+                  << "\",\"pos\":[" << rp.pos.x << "," << rp.pos.y << "," << rp.pos.z << "]"
+                  << ",\"yaw\":" << rp.yaw << ",\"pitch\":" << rp.pitch
+                  << ",\"visible\":" << (rp.visible ? "true" : "false") << "}";
+            }
+        }
+        o << "]";
+    } else {
+        o << ",\"mp\":false";
+    }
+    o << ",\"chat\":[";
+    {
+        size_t chat_start = chat_log_.size() > 3 ? chat_log_.size() - 3 : 0;
+        bool first_chat = true;
+        for (size_t i = chat_start; i < chat_log_.size(); ++i) {
+            if (!first_chat) o << ",";
+            first_chat = false;
+            o << "\"" << json_escape(chat_log_[i].text) << "\"";
+        }
+    }
+    o << "]";
     auto it = worlds_.find(current_dimension_);
     if (it != worlds_.end() && it->second) {
         const World& w = *it->second;
@@ -3932,8 +4201,88 @@ void Game::execute_command(const std::string& cmd) {
             fire_player_arrow(charge);
             add_chat_message("Fired arrow (charge=" + std::to_string(charge) + ")");
         }
+    } else if (arg == "mp_host") {
+        uint16_t port = MP_DEFAULT_PORT;
+        if (ss >> port) { /* port provided */ }
+        if (is_multiplayer()) {
+            add_chat_message("Sesja multiplayer juz dziala.");
+        } else if (mp_host_start(port)) {
+            add_chat_message("Serwer nasluchuje na porcie " + std::to_string(port));
+        } else {
+            add_chat_message("Nie udalo sie uruchomic serwera (port zajety?).");
+        }
+    } else if (arg == "mp_leave") {
+        if (is_multiplayer_host()) {
+            mp_host_stop();
+            add_chat_message("Serwer zatrzymany. Gra kontynuowana w trybie singleplayer.");
+        } else if (is_multiplayer_client()) {
+            mp_return_to_menu_pending_ = true;
+        } else {
+            add_chat_message("Nie jestes w grze sieciowej.");
+        }
+    } else if (arg == "mp_players") {
+        if (!is_multiplayer()) {
+            add_chat_message("Tryb singleplayer.");
+        } else {
+            std::string names;
+            for (const auto& rp : remote_players_) {
+                if (!names.empty()) names += ", ";
+                names += rp.name;
+            }
+            add_chat_message("Gracze online (" + std::to_string(remote_players_.size() + 1) +
+                             "): " + (names.empty() ? "tylko ty" : names + " + ty"));
+        }
+    } else if (arg == "say") {
+        std::string text;
+        std::getline(ss, text);
+        if (!text.empty() && text.front() == ' ') text.erase(0, 1);
+        if (!text.empty()) submit_chat_line(text);
+        else add_chat_message("Uzycie: /say <tekst>");
+    } else if (arg == "mine") {
+        // Automation/QA: break a block through the same flow as a real click
+        // (local prediction + authoritative PlayerAction to the host).
+        int x, y, z;
+        if (ss >> x >> y >> z) {
+            World& w = *worlds_[current_dimension_];
+            BlockPos p{x, y, z};
+            if (w.get_block(p) == BLOCK_AIR) {
+                add_chat_message("Nothing to mine there");
+            } else {
+                w.set_block(p, BLOCK_AIR);
+                if (client_session_) {
+                    client_session_->send_action(PlayerActionType::BreakBlock, x, y, z, 0);
+                }
+                redstone_.on_block_changed(w, p);
+                add_chat_message("Mined " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z));
+            }
+        } else {
+            add_chat_message("Usage: /mine <x> <y> <z>");
+        }
+    } else if (arg == "place") {
+        // Automation/QA: place a block through the same flow as a real click.
+        int x, y, z;
+        std::string block_name;
+        if (ss >> x >> y >> z >> block_name) {
+            BlockId bid = block_id_by_name(block_name);
+            if (bid == BLOCK_AIR) {
+                add_chat_message("Unknown block: " + block_name);
+            } else {
+                World& w = *worlds_[current_dimension_];
+                BlockPos p{x, y, z};
+                w.set_block(p, bid);
+                if (client_session_) {
+                    client_session_->send_action(PlayerActionType::PlaceBlock, x, y, z,
+                                                 static_cast<int32_t>(bid));
+                }
+                redstone_.on_block_changed(w, p);
+                add_chat_message("Placed " + block_name + " at " + std::to_string(x) + " " +
+                                 std::to_string(y) + " " + std::to_string(z));
+            }
+        } else {
+            add_chat_message("Usage: /place <x> <y> <z> <block>");
+        }
     } else if (arg == "help") {
-        add_chat_message("Commands: /tp /time /give /gamemode /setblock /goto /fly /sethome /home /kill /spawnmob /fillfurnace /aimnearest /shoot /select /probe /tpdungeon /quest /tpvillage /killmobs /recipes /quality");
+        add_chat_message("Commands: /tp /time /give /gamemode /setblock /goto /fly /sethome /home /kill /spawnmob /fillfurnace /aimnearest /shoot /select /probe /tpdungeon /quest /tpvillage /killmobs /recipes /quality /mp_host /mp_players /mp_leave /say /mine /place");
     } else if (arg == "quality") {
         std::string preset;
         if (ss >> preset) {
@@ -3957,6 +4306,485 @@ void Game::execute_command(const std::string& cmd) {
     } else {
         add_chat_message("Unknown command: " + arg);
     }
+}
+
+// =================================================================
+// MULTIPLAYER
+// =================================================================
+
+bool Game::mp_host_start(uint16_t port) {
+    if (server_session_) return true;
+    if (client_session_) return false;
+    server_session_ = std::make_unique<ServerSession>();
+    if (!server_session_->start(port, this)) {
+        server_session_.reset();
+        return false;
+    }
+    mp_host_port_ = port;
+    remote_players_.clear();
+    return true;
+}
+
+void Game::mp_host_stop() {
+    if (!server_session_) return;
+    server_session_->shutdown_with_message("Host opuscil swiat");
+    server_session_.reset();
+    remote_players_.clear();
+}
+
+bool Game::mp_client_join(const std::string& host, uint16_t port, const std::string& username) {
+    if (client_session_ || server_session_) return false;
+    client_session_ = std::make_unique<ClientSession>();
+    client_session_->connect(host, port, username, this);
+    // Show connection status (also serves CLI joins, which start from the menu).
+    state_ = GameState::MultiplayerConnect;
+    return true;
+}
+
+void Game::mp_client_leave() {
+    if (client_session_) {
+        client_session_->disconnect();
+        client_session_.reset();
+    }
+    remote_players_.clear();
+    my_player_id_ = 0;
+}
+
+World* Game::mp_world() {
+    auto it = worlds_.find(current_dimension_);
+    return it == worlds_.end() ? nullptr : it->second.get();
+}
+
+void Game::refresh_remote_players_host() {
+    // Rebuild the render/AI mirror from the session registry, preserving the
+    // previous snapshots of known players so rendering can interpolate.
+    std::vector<RemotePlayer> next;
+    server_session_->for_each_player([&](int32_t id, const std::string& name,
+                                         float x, float y, float z,
+                                         float yaw, float pitch, uint8_t flags) {
+        const RemotePlayer* known = nullptr;
+        for (const auto& rp : remote_players_) {
+            if (rp.id == id) known = &rp;
+        }
+        RemotePlayer rp;
+        if (known) {
+            rp = *known;
+        } else {
+            rp.prev_pos = Vec3(x, y, z); // no interpolation on first sight
+            rp.visible = true;
+        }
+        rp.id = id;
+        rp.name = name;
+        rp.pos = Vec3(x, y, z);
+        rp.velocity = rp.pos - rp.prev_pos;
+        rp.yaw = yaw;
+        rp.pitch = pitch;
+        rp.flags = flags;
+        next.push_back(rp);
+    });
+    remote_players_.swap(next);
+}
+
+const Vec3* Game::mp_nearest_player_pos(const Vec3& from) const {
+    const Vec3* best = &player_.pos;
+    float best_d2 = (player_.pos.x - from.x) * (player_.pos.x - from.x) +
+                    (player_.pos.y - from.y) * (player_.pos.y - from.y) +
+                    (player_.pos.z - from.z) * (player_.pos.z - from.z);
+    for (const auto& rp : remote_players_) {
+        if (!rp.visible) continue;
+        float d2 = (rp.pos.x - from.x) * (rp.pos.x - from.x) +
+                   (rp.pos.y - from.y) * (rp.pos.y - from.y) +
+                   (rp.pos.z - from.z) * (rp.pos.z - from.z);
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            best = &rp.pos;
+        }
+    }
+    return best;
+}
+
+bool Game::mp_apply_remote_break(const BlockPos& pos, const Vec3& player_pos, std::string* err) {
+    auto reject = [&](const char* m) {
+        if (err) *err = m;
+        return false;
+    };
+    World* w = mp_world();
+    if (!w) return reject("brak swiata");
+    BlockId block = w->get_block(pos);
+    if (block == BLOCK_AIR) return reject("blok juz jest pusty");
+    if (block == BLOCK_BEDROCK) return reject("bedrock jest niezniszczalny");
+    float dx = pos.x + 0.5f - player_pos.x;
+    float dy = pos.y + 0.5f - player_pos.y;
+    float dz = pos.z + 0.5f - player_pos.z;
+    if (std::sqrt(dx * dx + dy * dy + dz * dz) > REACH_CREATIVE + 1.0f) {
+        return reject("poza zasiegiem");
+    }
+    // World::set_block fires the on_block_changed hook -> batched broadcast.
+    if (!w->set_block(pos, BLOCK_AIR)) return reject("chunk niezaładowany");
+    redstone_.on_block_changed(*w, pos);
+    if (block == BLOCK_FURNACE) {
+        furnaces_.erase(furnace_key_from_block(pos));
+    }
+    return true;
+}
+
+bool Game::mp_apply_remote_place(const BlockPos& pos, BlockId block, const Vec3& player_pos,
+                                 std::string* err) {
+    auto reject = [&](const char* m) {
+        if (err) *err = m;
+        return false;
+    };
+    World* w = mp_world();
+    if (!w) return reject("brak swiata");
+    if (block == BLOCK_AIR || block >= BLOCK_COUNT) return reject("nieznany blok");
+    float dx = pos.x + 0.5f - player_pos.x;
+    float dy = pos.y + 0.5f - player_pos.y;
+    float dz = pos.z + 0.5f - player_pos.z;
+    if (std::sqrt(dx * dx + dy * dy + dz * dz) > REACH_CREATIVE + 1.0f) {
+        return reject("poza zasiegiem");
+    }
+    // place_block() validates target occupancy and the placer's own AABB (the
+    // remote player is represented by a throwaway Player at their last pos).
+    Player placer;
+    placer.pos = player_pos;
+    if (!place_block(*w, pos, block, placer)) return reject("miejsce zajete");
+    redstone_.on_block_changed(*w, pos);
+    if (block == BLOCK_FURNACE) {
+        furnaces_[furnace_key_from_block(pos)]; // create empty state on placement
+    }
+    return true;
+}
+
+void Game::mp_chat_from_remote(const std::string& from, const std::string& text) {
+    add_chat_message("<" + from + "> " + text);
+}
+
+void Game::submit_chat_line(std::string text) {
+    if (text.empty()) return;
+    if (text[0] == '/') {
+        execute_command(text); // commands always run locally
+        return;
+    }
+    if (server_session_) {
+        add_chat_message("<Ty> " + text);
+        server_session_->broadcast_host_chat(text);
+    } else if (client_session_) {
+        // No local echo: the host's broadcast is the single source of chat.
+        client_session_->send_chat(text);
+    } else {
+        add_chat_message("<Player> " + text);
+    }
+}
+
+void Game::mp_client_disconnected(const std::string& reason) {
+    add_chat_message("Rozlaczono: " + reason);
+    if (client_session_) {
+        client_session_->disconnect();
+        client_session_.reset();
+    }
+    remote_players_.clear();
+    my_player_id_ = 0;
+    // Teardown of the loaded world must not happen mid-tick / mid-drain.
+    mp_return_to_menu_pending_ = true;
+}
+
+void Game::mp_client_accepted(const net::LoginAcceptedPacket& acc) {
+    // Reset any prior session state (mirrors start_game's teardown block).
+    menu_world_active_ = false;
+    renderer_.clear_meshes();
+    pool_.wait();
+    GenResult stale;
+    while (gen_channel_.try_pop(stale)) {}
+    {
+        std::pair<ChunkPos, ChunkMeshData> sm;
+        while (mesh_channel_.try_pop(sm)) { recycled_meshes_.push(std::move(sm.second)); }
+    }
+    gen_in_flight_.clear();
+    mesh_in_flight_.clear();
+    worlds_.clear();
+    generators_.clear();
+    storage_.reset(); // clients never persist anything
+    in_memory_world_ = true;
+
+    worlds_[DimensionId::Overworld] =
+        std::make_unique<World>(acc.seed, DimensionId::Overworld);
+
+    mobs_.clear();
+    furnaces_.clear();
+    projectiles_.clear();
+    furnace_open_ = false;
+
+    player_.pos = Vec3(acc.spawn_x, acc.spawn_y, acc.spawn_z);
+    player_.prev_pos = player_.pos;
+    player_.velocity = Vec3(0, 0, 0);
+    player_.mode = static_cast<GameMode>(acc.game_mode);
+    player_.flying = false;
+    player_.health = player_.max_health = 20.0f;
+    player_.food_level = 20;
+    player_.inventory.clear();
+    time_of_day_ = acc.time_of_day;
+    my_player_id_ = acc.player_id;
+    remote_players_.clear();
+    is_new_world_ = false;
+
+    // Count the requested disc so the loading progress bar works the same as
+    // in singleplayer.
+    int px = static_cast<int>(std::floor(player_.pos.x));
+    int pz = static_cast<int>(std::floor(player_.pos.z));
+    int cx = px < 0 ? (px - (CHUNK_SIZE - 1)) / CHUNK_SIZE : px / CHUNK_SIZE;
+    int cz = pz < 0 ? (pz - (CHUNK_SIZE - 1)) / CHUNK_SIZE : pz / CHUNK_SIZE;
+    loading_total_chunks_ = 0;
+    for (int dz = -render_distance_; dz <= render_distance_; ++dz) {
+        for (int dx = -render_distance_; dx <= render_distance_; ++dx) {
+            if (dx * dx + dz * dz > render_distance_ * render_distance_) continue;
+            if (!in_world_bounds(ChunkPos{cx + dx, cz + dz})) continue;
+            ++loading_total_chunks_;
+        }
+    }
+    loading_done_chunks_ = 0;
+    last_requested_center_ = ChunkPos{cx, cz};
+
+    state_ = GameState::Loading;
+    glfwSetInputMode(renderer_.window(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    MC_LOG_INFO("MP client: accepted as player {} (seed {}, mode {})", acc.player_id,
+                acc.seed, acc.game_mode);
+
+    client_session_->send_ready();
+    client_session_->send_request_chunks(cx, cz, render_distance_);
+}
+
+void Game::mp_client_chunk(const net::ChunkDataPacket& pkt) {
+    World* w = mp_world();
+    if (!w) return;
+    std::vector<uint8_t> raw;
+    if (!zlib_decompress(pkt.data, raw)) {
+        MC_LOG_WARN("MP client: chunk ({}, {}) failed to decompress", pkt.chunk_x, pkt.chunk_z);
+        return;
+    }
+    auto chunk = World::chunk_pool.acquire();
+    chunk->reset(ChunkPos{pkt.chunk_x, pkt.chunk_z});
+    if (!deserialize_chunk(raw, *chunk)) {
+        MC_LOG_WARN("MP client: chunk ({}, {}) failed to decode", pkt.chunk_x, pkt.chunk_z);
+        return;
+    }
+    // reset() left light_dirty set: the mesh builder recomputes light for the
+    // client's copy (identical BFS to the host's post-edit path).
+    w->insert_chunk(std::move(chunk));
+}
+
+void Game::mp_client_blocks(const net::BlockUpdatesPacket& pkt) {
+    World* w = mp_world();
+    if (!w) return;
+    for (const auto& [packed, block] : pkt.updates) {
+        BlockPos p{unpack_block_x(packed), unpack_block_y(packed), unpack_block_z(packed)};
+        w->set_block(p, static_cast<BlockId>(block));
+    }
+}
+
+void Game::mp_client_spawn_player(const net::SpawnPlayerPacket& pkt) {
+    if (pkt.player_id == my_player_id_) return; // our own echo
+    for (auto& rp : remote_players_) {
+        if (rp.id == pkt.player_id) {
+            rp.name = pkt.name;
+            rp.pos = Vec3(pkt.x, pkt.y, pkt.z);
+            rp.prev_pos = rp.pos;
+            rp.yaw = rp.prev_yaw = pkt.yaw;
+            rp.pitch = rp.prev_pitch = pkt.pitch;
+            rp.visible = true;
+            return;
+        }
+    }
+    RemotePlayer rp;
+    rp.id = pkt.player_id;
+    rp.name = pkt.name;
+    rp.pos = rp.prev_pos = Vec3(pkt.x, pkt.y, pkt.z);
+    rp.yaw = rp.prev_yaw = pkt.yaw;
+    rp.pitch = rp.prev_pitch = pkt.pitch;
+    rp.visible = true;
+    remote_players_.push_back(rp);
+}
+
+void Game::mp_client_despawn_player(const net::DespawnPlayerPacket& pkt) {
+    remote_players_.erase(
+        std::remove_if(remote_players_.begin(), remote_players_.end(),
+                       [&](const RemotePlayer& rp) { return rp.id == pkt.player_id; }),
+        remote_players_.end());
+}
+
+void Game::mp_client_states(const net::PlayerStatesPacket& pkt) {
+    for (const auto& s : pkt.states) {
+        if (s.player_id == my_player_id_) continue;
+        RemotePlayer* rp = nullptr;
+        for (auto& cand : remote_players_) {
+            if (cand.id == s.player_id) rp = &cand;
+        }
+        if (!rp) {
+            // Snapshot for a player we never saw (missed SpawnPlayer): adopt.
+            RemotePlayer fresh;
+            fresh.id = s.player_id;
+            fresh.name = "Gracz " + std::to_string(s.player_id);
+            fresh.visible = true;
+            remote_players_.push_back(fresh);
+            rp = &remote_players_.back();
+            rp->prev_pos = Vec3(s.x, s.y, s.z);
+        }
+        rp->prev_pos = rp->pos;
+        rp->pos = Vec3(s.x, s.y, s.z);
+        rp->velocity = rp->pos - rp->prev_pos;
+        rp->prev_yaw = rp->yaw;
+        rp->yaw = s.yaw;
+        rp->prev_pitch = rp->pitch;
+        rp->pitch = s.pitch;
+        rp->flags = s.flags;
+        rp->visible = true;
+    }
+}
+
+void Game::tick_multiplayer_host() {
+    server_session_->tick_broadcast();
+}
+
+void Game::tick_multiplayer_client() {
+    PlayerMovePacket mv;
+    mv.x = player_.pos.x;
+    mv.y = player_.pos.y;
+    mv.z = player_.pos.z;
+    mv.yaw = player_.yaw;
+    mv.pitch = player_.pitch;
+    mv.flags = 0;
+    if (player_.on_ground) mv.flags |= PLAYER_FLAG_ON_GROUND;
+    if (player_.sneaking) mv.flags |= PLAYER_FLAG_SNEAKING;
+    if (player_.sprinting) mv.flags |= PLAYER_FLAG_SPRINTING;
+    if (player_.is_swinging) mv.flags |= PLAYER_FLAG_SWINGING;
+    client_session_->send_move(mv);
+}
+
+// ---------------------------------------------------------------- multiplayer UI
+
+void Game::draw_multiplayer_menu() {
+    GLFWwindow* w = renderer_.window();
+    renderer_.poll_events();
+    automation_.update(*this);
+    if (client_session_) client_session_->drain_events();
+    if (renderer_.should_close()) { running_ = false; return; }
+    if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        static double esc_time = 0;
+        double now = glfwGetTime();
+        if (now - esc_time > 0.3) { state_ = GameState::MainMenu; return; }
+        esc_time = now;
+    }
+
+    poll_ui_mouse(*this, ui_, w);
+    draw_menu_background();
+    ui_.begin_frame();
+    int sw = ui_.screen_width();
+    int sh = ui_.screen_height();
+    float cx = sw * 0.5f;
+
+    ui_.draw_text_centered("Multiplayer", cx, 40, 3.0f, 200, 220, 255);
+
+    float btn_w = 320, btn_h = 44, btn_y = sh * 0.34f;
+    if (ui_.button("Hostuj świat", cx - btn_w * 0.5f, btn_y, btn_w, btn_h, 1.6f)) {
+        hosting_intent_ = true;
+        mp_host_port_ = MP_DEFAULT_PORT;
+        state_ = GameState::WorldSelect;
+        world_list_ = WorldManager::list_worlds();
+        world_sel_index_ = world_list_.empty() ? -1 : 0;
+        return;
+    }
+    if (ui_.button("Dołącz do gry", cx - btn_w * 0.5f, btn_y + 60, btn_w, btn_h, 1.6f)) {
+        state_ = GameState::MultiplayerConnect;
+        mp_join_active_field_ = 0;
+        return;
+    }
+    if (ui_.button("Powrót", cx - btn_w * 0.5f, btn_y + 120, btn_w, btn_h, 1.6f)) {
+        state_ = GameState::MainMenu;
+        return;
+    }
+    ui_.draw_text_centered("Host: wybierz świat - inni dolacza po IP i porcie",
+                           cx, sh - 60, 1.1f, 150, 160, 180);
+    ui_.draw_text_centered("Dołącz: podaj IP hosta, port (" + std::to_string(MP_DEFAULT_PORT) +
+                           ") i nick", cx, sh - 42, 1.1f, 150, 160, 180);
+
+    ui_.end_frame();
+    finish_frame();
+}
+
+void Game::draw_multiplayer_connect() {
+    GLFWwindow* w = renderer_.window();
+    renderer_.poll_events();
+    automation_.update(*this);
+    // No tick loop runs in menus: the login handshake and chunk stream only
+    // move forward if we pump the session here. A successful LoginAccepted
+    // flips state_ to Loading inside mp_client_accepted.
+    if (client_session_) client_session_->drain_events();
+    if (mp_return_to_menu_pending_) {
+        mp_return_to_menu_pending_ = false;
+        return_to_menu();
+        return;
+    }
+    if (renderer_.should_close()) { running_ = false; return; }
+    if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        static double esc_time = 0;
+        double now = glfwGetTime();
+        if (now - esc_time > 0.3) {
+            mp_client_leave();
+            state_ = GameState::MainMenu;
+            return;
+        }
+        esc_time = now;
+    }
+
+    poll_ui_mouse(*this, ui_, w);
+    draw_menu_background();
+    ui_.begin_frame();
+    int sw = ui_.screen_width();
+    int sh = ui_.screen_height();
+    float cx = sw * 0.5f;
+
+    ui_.draw_text_centered("Dołącz do gry", cx, 40, 3.0f, 200, 220, 255);
+
+    float form_w = 420, form_x = cx - form_w * 0.5f;
+    float y = sh * 0.30f;
+
+    bool act_host = mp_join_active_field_ == 0;
+    bool act_port = mp_join_active_field_ == 1;
+    bool act_nick = mp_join_active_field_ == 2;
+    ui_.draw_text("Adres hosta:", form_x, y, 1.2f, 215, 225, 240);
+    ui_.text_input(mp_join_host_, form_x, y + 22, form_w, 36, act_host, 1.4f);
+
+    y += 78;
+    ui_.draw_text("Port:", form_x, y, 1.2f, 215, 225, 240);
+    ui_.text_input(mp_join_port_, form_x, y + 22, form_w, 36, act_port, 1.4f);
+
+    y += 78;
+    ui_.draw_text("Twój nick:", form_x, y, 1.2f, 215, 225, 240);
+    ui_.text_input(mp_join_name_, form_x, y + 22, form_w, 36, act_nick, 1.4f);
+    // Sync back whichever field the UI left focused.
+    mp_join_active_field_ = act_host ? 0 : act_port ? 1 : 2;
+
+    y += 92;
+    if (ui_.button("Połącz", cx - form_w * 0.5f, y, 200, 44, 1.6f)) {
+        if (mp_join_host_.empty()) {
+            add_chat_message("Podaj adres hosta.");
+        } else if (!client_session_) {
+            uint16_t port = static_cast<uint16_t>(std::atoi(mp_join_port_.c_str()));
+            if (port == 0) port = MP_DEFAULT_PORT;
+            mp_client_join(mp_join_host_, port,
+                           mp_join_name_.empty() ? "Gracz" : mp_join_name_);
+        }
+    }
+    if (ui_.button("Anuluj", cx + 20, y, 180, 44, 1.6f)) {
+        mp_client_leave();
+        state_ = GameState::MainMenu;
+    }
+
+    if (client_session_) {
+        ui_.draw_text_centered(client_session_->status(), cx, y + 70, 1.3f, 200, 220, 255);
+    }
+
+    ui_.end_frame();
+    finish_frame();
 }
 
 } // namespace mc

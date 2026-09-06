@@ -46,6 +46,7 @@ struct MobSpec {
     uint8_t drop_min = 0;
     uint8_t drop_max = 0;
     bool builtin = false;           // one of the four compiled-in species
+    bool no_random_spawn = false;   // exclude from ambient spawn pools
 };
 
 // Registry of every mob species the game can spawn: the four built-ins plus
@@ -72,6 +73,11 @@ public:
     // One custom species of the given hostility (round-robin by `tick`);
     // returns nullptr when none exist.
     const MobSpec* random_custom(bool hostile, uint32_t tick) const;
+
+    // Appends the synthetic "player" species (procedural humanoid rig, never
+    // randomly spawned) unless already present. Called by scan_directory so
+    // remote players share the mob render pipeline.
+    void ensure_player_species();
 
     // Applies spec stats/AI to a freshly-positioned mob (used by the spawner
     // and by /spawnmob for custom species).

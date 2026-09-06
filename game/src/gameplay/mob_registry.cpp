@@ -221,10 +221,27 @@ std::vector<const MobSpec*> MobRegistry::customs() const {
 const MobSpec* MobRegistry::random_custom(bool hostile, uint32_t tick) const {
     std::vector<const MobSpec*> pool;
     for (const auto& s : specs_) {
-        if (!s.builtin && s.hostile == hostile) pool.push_back(&s);
+        if (!s.builtin && !s.no_random_spawn && s.hostile == hostile) pool.push_back(&s);
     }
     if (pool.empty()) return nullptr;
     return pool[tick % pool.size()];
+}
+
+void MobRegistry::ensure_player_species() {
+    if (find("player")) return;
+    if (specs_.size() >= kMaxMobSpecies) return;
+    MobSpec spec;
+    spec.id = static_cast<uint8_t>(specs_.size());
+    spec.name = "player";
+    spec.display_name = "Player";
+    spec.hostile = false;
+    spec.health = 20.0f;
+    spec.body_width = 0.6f;
+    spec.body_height = 1.8f;
+    spec.no_random_spawn = true;
+    specs_.push_back(std::move(spec));
+    MC_LOG_INFO("MobRegistry: registered synthetic 'player' species (id {})",
+                specs_.back().id);
 }
 
 void MobRegistry::apply_spec(Mob& m, const MobSpec& spec) {
@@ -246,6 +263,12 @@ void MobRegistry::apply_spec(Mob& m, const MobSpec& spec) {
         m.goal_selector.add_goal(4, std::make_shared<LookAtPlayerGoal>());
         m.goal_selector.add_goal(6, std::make_shared<WanderGoal>());
     }
+}
+
+
+uint8_t player_species_id() {
+    if (const MobSpec* s = MobRegistry::instance().find("player")) return s->id;
+    return 0;
 }
 
 } // namespace mc
