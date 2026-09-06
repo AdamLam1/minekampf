@@ -167,7 +167,20 @@ void main() {
     vec4 tex = texture(u_albedo_map, uv);
     if (tex.a < 0.1) discard;
 
+    // Stylized albedo grade: a modest saturation/contrast lift on the raw
+    // texel (before lighting) keeps blocks from reading as pale chalk under
+    // the bright day sky, the way vanilla Minecraft's albedo does.
+    {
+        float al = dot(tex.rgb, vec3(0.2126, 0.7152, 0.0722));
+        tex.rgb = clamp(mix(vec3(al), tex.rgb, 1.22), 0.0, 1.0);
+        tex.rgb = clamp((tex.rgb - 0.5) * 1.07 + 0.5, 0.0, 1.0);
+    }
+
+    // Terrain normal maps are a subtle micro-detail, not a rerender of the
+    // sun: full strength made flat faces dappled/noisy. Water keeps its own
+    // animated wave normals below.
     vec3 normal_ts = texture(u_normal_map, uv).rgb * 2.0 - 1.0;
+    if (v_mat_type != 1.0) normal_ts *= 0.55;
     vec3 N = normalize(TBN * normal_ts);
     
     vec4 spec_data = texture(u_specular_map, uv);
@@ -226,25 +239,22 @@ void main() {
     float sun_up = smoothstep(0.0, 0.08, u_sun_dir.y);
     float final_sun_exposure = sun_exposure * (1.0 - shadow) * sun_up;
 
-    // Shaderpack-style matte terrain: non-metals get a roughness floor so
-    // stone/dirt/grass can never mirror-reflect; authored metals keep theirs.
-    float rough_mat = mix(max(roughness, 0.50), roughness, step(0.5, metallic));
-    vec3 F0 = mix(vec3(0.04), tex.rgb, metallic);
-    float NDF = distribution_ggx(N, H, rough_mat);
-    float G = geometry_smith(N, V, L, rough_mat);
-    vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
+    // Minecraft-style fixed face shading: the voxel read comes from every
+    // cube side having its own brightness step (top 1.0, N/S 0.82, E/W 0.65,
+    // bottom 0.55), modulated a little by which side faces the sun. The
+    // normal-mapped ndotl alone flattened everything into one chalky value.
+    vec3 gnorm = normalize(v_normal);
+    float face_shade = (gnorm.y > 0.5) ? 1.0
+                     : (gnorm.y < -0.5) ? 0.58
+                     : (abs(gnorm.x) > 0.5) ? 0.72 : 0.84;
+    face_shade *= mix(0.92, 1.08, ndotl);
 
-    vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * ndotl + 0.0001;
-    // No *pi gain and a hard clamp — the unclamped term blew up at grazing
-    // angles and made every surface read like glass.
-    vec3 specular_brdf = min(numerator / denominator, vec3(0.35));
-
-    vec3 kS = F;
-    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-    float dir_light = mix(0.65, 1.25, ndotl * final_sun_exposure)
-                    * clamp(u_sky_brightness + 0.15, 0.0, 1.0);
+    // Specular is a METAL/WATER feature only (shaderpack matte terrain):
+    // dielectric GGX sheen from F0=0.04 is exactly what made every block read
+    // as glass. Non-metals render pure diffuse like vanilla + BSL terrain.
+    float dir_light = mix(0.85, 1.30, final_sun_exposure)
+                    * clamp(u_sky_brightness + 0.15, 0.0, 1.0)
+                    * face_shade;
     // Foliage crosses have no meaningful face normal — light them like the
     // terrain around them instead of a downward-facing cube side.
     if (is_foliage) dir_light = 1.0;
@@ -276,18 +286,31 @@ void main() {
     // Stylized ambient floor: soft in daylight so shadows stay readable;
     // at night the floor is dim MOONLIGHT BLUE instead of flat grey.
     vec3 night_amb = vec3(0.030, 0.042, 0.075);
+    // Stylized shadow tint (Hytale-style): shadows carry a cool violet cast
+    // instead of neutral black, so shadowed albedo stays readable.
     float amb_level = mix(0.04, 0.22, clamp(u_sky_brightness, 0.0, 1.0));
-    vec3 ambient = mix(night_amb, vec3(amb_level), clamp(u_sky_brightness + 0.04, 0.0, 1.0));
-    // Smooth-lighting AO with a soft floor: raw ao/3 crushed indoor corners
-    // to a third of their light even where a torch was flooding the room.
-    float ao_soft = mix(0.45, 1.0, ao);
+    vec3 ambient = mix(night_amb, vec3(0.212, 0.200, 0.252) * (amb_level / 0.22),
+                       clamp(u_sky_brightness + 0.04, 0.0, 1.0));
+    // Smooth-lighting AO with a floor: raw ao/3 crushed indoor corners to a
+    // third of their light even where a torch was flooding the room — but a
+    // too-high floor erases corner occlusion entirely.
+    float ao_soft = mix(0.38, 1.0, ao);
     light_col = max(light_col * ao_soft, ambient);
     if (is_foliage) light_col = max(light_col, vec3(0.55 * clamp(u_sky_brightness + 0.2, 0.0, 1.0)));
 
-    vec3 col = kD * tex.rgb * v_color * light_col;
-    // Specular responds to DIRECT sun only (never torch/ambient light) and is
-    // skipped on foliage crosses, whose normals are meaningless.
-    if (!is_foliage) col += specular_brdf * sun_tint * (final_sun_exposure * ndotl);
+    vec3 col = tex.rgb * v_color * light_col;
+
+    // Sun glints survive only on authored metals (crude ore flecks, tools).
+    if (metallic > 0.5 && !is_foliage) {
+        float rough_mat = max(roughness, 0.15);
+        vec3 F0 = mix(vec3(0.04), tex.rgb, metallic);
+        float NDF = distribution_ggx(N, H, rough_mat);
+        float G = geometry_smith(N, V, L, rough_mat);
+        vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
+        float denom = 4.0 * max(dot(N, V), 0.0) * ndotl + 0.0001;
+        vec3 specular_brdf = min(NDF * G * F / denom, vec3(0.35));
+        col += specular_brdf * sun_tint * (final_sun_exposure * ndotl);
+    }
 
     // 1. Foliage Subsurface Scattering (SSS Translucency Glow when backlit)
     if (is_foliage) {
@@ -335,23 +358,28 @@ void main() {
         vec3 flat_R = normalize(vec3(refl_dir.x, 0.0, refl_dir.z));
         float low_sun = 1.0 - clamp(u_sun_dir.y * 3.0, 0.0, 1.0);
         refl_col = mix(refl_col, vec3(1.0, 0.55, 0.25),
-                       low_sun * pow(max(dot(flat_R, flat_L), 0.0), 3.0) * 0.5);
+                       low_sun * pow(max(dot(flat_R, flat_L), 0.0), 3.0) * 0.7);
 
-        vec3 water_deep = vec3(0.05, 0.20, 0.52);
-        vec3 water_shallow = vec3(0.10, 0.34, 0.58);
+        vec3 water_deep = vec3(0.035, 0.15, 0.42);
+        vec3 water_shallow = vec3(0.07, 0.27, 0.50);
         vec3 body = mix(water_shallow, water_deep, clamp((1.0 - cos_up) * 1.6, 0.0, 1.0));
         body *= 1.0 + (wave_n1.z + wave_n2.z) * 0.06;
 
-        col = mix(body, refl_col, clamp(fres, 0.0, 0.90)) * max(light_col, vec3(0.35));
+        // Capped lower than a mirror: even at grazing angles a hint of the
+        // blue body keeps water from reading as liquid glass.
+        col = mix(body, refl_col, clamp(fres, 0.0, 0.80)) * max(light_col, vec3(0.35));
 
         // Glints: a narrow pow-420 sparkle that dances on the wave normals,
-        // plus a whisper of the old broad lobe for the far shoreline.
+        // plus a broad warm lobe for the far shoreline. Gated by sun height
+        // only — the sky-exposure term collapses at low sun and would erase
+        // exactly the sunset glints this exists for.
         float rdotl = max(dot(refl_dir, L), 0.0);
-        col += sun_tint * (pow(rdotl, 420.0) * 2.2 + pow(rdotl, 48.0) * 0.06) * final_sun_exposure;
+        col += sun_tint * (pow(rdotl, 420.0) * 2.4 + pow(rdotl, 48.0) * 0.14)
+             * sun_up;
 
         // Looking down: translucent enough to read the tinted bottom; grazing:
-        // solid mirror. Far water stays solid regardless of angle.
-        out_alpha = mix(0.82, 0.97, clamp(fres * 1.3, 0.0, 1.0));
+        // nearly solid. Far water stays solid regardless of angle.
+        out_alpha = mix(0.74, 0.96, clamp(fres * 1.3, 0.0, 1.0));
         out_alpha = max(out_alpha, smoothstep(40.0, 100.0, v_dist));
     }
 

@@ -191,7 +191,10 @@ def main():
 
         # ---- Sunset sun path ------------------------------------------------
         # Stay on the ocean vantage (water must be in frame for the sun path).
-        api.exec("/time 0.75")
+        # time 0.62: this engine's day runs 0.0 (dawn) .. 0.75 (dusk), so 0.75
+        # is ALREADY night (moon up); the actual golden-hour sun path lives at
+        # ~0.62. Calibrated 2026-09-06: warm_frac 19.8% @0.62, 0.0% @0.75.
+        api.exec("/time 0.62")
         time.sleep(2.0)
         best_warm = 0.0
         for yaw in (0, 90, 180, 270):

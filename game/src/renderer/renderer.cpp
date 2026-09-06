@@ -304,9 +304,10 @@ void Renderer::begin_frame(const Camera& camera) {
     shader_.set_int("u_shadow_map", 4);
     
     // Same sky/fog colors the skybox uses — the water Fresnel path must
-    // reflect the actual sky, not a hardcoded tint.
-    glm::vec3 chunk_sky = glm::vec3(0.5f, 0.69f, 1.0f) * sky_brightness_;
-    glm::vec3 chunk_fog = glm::vec3(0.62f, 0.80f, 0.96f) * sky_brightness_;
+    // reflect the actual sky, not a hardcoded tint. Day zenith is a deeper
+    // saturated blue than the pale horizon so terrain silhouettes pop.
+    glm::vec3 chunk_sky = glm::vec3(0.36f, 0.56f, 0.94f) * sky_brightness_;
+    glm::vec3 chunk_fog = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
     shader_.set_vec3("u_sky_color", chunk_sky.x, chunk_sky.y, chunk_sky.z);
     shader_.set_vec3("u_fog_color", chunk_fog.x, chunk_fog.y, chunk_fog.z);
     shader_.set_float("u_fog_start", 110.0f);
@@ -330,6 +331,10 @@ void Renderer::end_frame() {
 
     post_shader_.use();
     post_shader_.set_vec3("u_sun_dir", sun_dir_.x, sun_dir_.y, sun_dir_.z);
+    // Same horizon color the sky shader uses — distant water fogs toward it,
+    // so any mismatch seams the ocean against the sky.
+    glm::vec3 post_fog = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
+    post_shader_.set_vec3("u_fog_color", post_fog.x, post_fog.y, post_fog.z);
     post_shader_.set_mat4("u_view_proj", glm::value_ptr(view_proj_));
     post_shader_.set_mat4("u_inv_view_proj", glm::value_ptr(inv_view_proj_));
     post_shader_.set_mat4("u_proj", glm::value_ptr(proj_));
@@ -955,9 +960,9 @@ void Renderer::draw_sky(const Camera& camera) {
     sky_shader_.set_mat4("u_view_proj_no_translation", glm::value_ptr(vp_no_trans));
     
     // Sky color matches day/night, fog matches horizon
-    // Use similar colors to fog
-    glm::vec3 sky_color = glm::vec3(0.5f, 0.69f, 1.0f) * sky_brightness_;
-    glm::vec3 fog_color = glm::vec3(0.62f, 0.80f, 0.96f) * sky_brightness_; // simple day fog matching sky
+    // Deep day zenith, paler horizon (see main-pass comment on chunk_sky).
+    glm::vec3 sky_color = glm::vec3(0.36f, 0.56f, 0.94f) * sky_brightness_;
+    glm::vec3 fog_color = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
     
     sky_shader_.set_vec3("u_sky_color", sky_color.x, sky_color.y, sky_color.z);
     sky_shader_.set_vec3("u_fog_color", fog_color.x, fog_color.y, fog_color.z);

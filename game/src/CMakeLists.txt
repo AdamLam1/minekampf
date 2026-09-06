@@ -80,7 +80,7 @@ target_link_libraries(minekampf PRIVATE minekampf_engine)
 add_executable(minekampf_assets dev/asset_dump.cpp)
 target_link_libraries(minekampf_assets PRIVATE minekampf_engine)
 target_compile_definitions(minekampf_assets PRIVATE
-    _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN MC_ATLAS_DEBUG_TILE=1
 )
 if(MSVC)
     target_compile_options(minekampf_assets PRIVATE /W4 /utf-8 /EHsc)

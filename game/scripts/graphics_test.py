@@ -23,13 +23,16 @@ from visual_test import GameClient, EXE, GAME_DIR, kill_game, capture  # noqa: E
 
 
 def torch_orientation(img, box):
-    """Finds the flame (overexposed ember core) vs the stick (warm-lit wood)
-    pixels inside the given region and returns their centroid rows — the flame
-    must be ABOVE (smaller y) the stick for an upright torch.
+    """Finds the flame (overexposed ember core) vs the stick pixels inside the
+    given region and returns their centroid rows — the flame must be ABOVE
+    (smaller y) the stick for an upright torch.
 
-    Thresholds are calibrated for the shaderpack lighting: the torch's own
-    warm light tints its stick orange (it used to read neutral brown), and
-    worldgen flowers must not classify as flame (they lack a bright green
+    Thresholds calibrated for the shaderpack lighting. 2026-09-06: the stick
+    matcher used to look for warm-lit wood, which only read warm because
+    terrain carried a universal GGX sheen; terrain is matte now (by design)
+    and a shadowed stick fogs toward cool blue. Orientation is still verified
+    by matching DARK stick pixels in the column directly below the bright
+    flame — worldgen flowers cannot classify as flame (no bright green
     channel)."""
     region = img.crop(box).convert("RGB")
     w, h = region.size
@@ -37,16 +40,17 @@ def torch_orientation(img, box):
     for yy in range(h):
         for xx in range(w):
             r, g, b = region.getpixel((xx, yy))
+            lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
             if r > 225 and g > 140 and b < 160 and r - b > 70:
                 flame_pts.append((xx, yy))    # overexposed ember core
-            elif 40 < r < 230 and 20 < g < 210 and r > g + 12 and b < r + 25:
-                stick_pts.append((xx, yy))    # warm-lit or backlit wood
+            elif lum < 90 and r <= g + 25:
+                stick_pts.append((xx, yy))    # dark stick / mount column
     if not flame_pts:
         return None, None, 0, 0
     fx = sum(p[0] for p in flame_pts) / len(flame_pts)
     fy = sum(p[1] for p in flame_pts) / len(flame_pts)
-    # Stick = dark-warm pixels in a narrow column directly BELOW the flame —
-    # counting stick-colored pixels everywhere would match dirt/clouds.
+    # Stick = dark pixels in a narrow column directly BELOW the flame —
+    # counting dark pixels everywhere would match terrain shadows.
     below = [p[1] for p in stick_pts if abs(p[0] - fx) < 25 and fy + 2 < p[1] < fy + 90]
     stick_y = sum(below) / len(below) if below else None
     return fy, stick_y, len(flame_pts), len(below)

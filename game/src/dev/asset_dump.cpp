@@ -319,12 +319,29 @@ int main(int argc, char** argv) {
     mc::TextureAtlas atlas;
     atlas.generate();
 
+    auto ok = true;
+    // QA guard: a tile whose FIRST pixel is pure magenta was overridden by a
+    // missing-texture placeholder (happened with a stray
+    // bin/assets/textures/Stone.png). Fails the dump if any are found.
+    {
+        const auto& alb = atlas.albedo_data();
+        int tile_bytes = mc::TextureAtlas::TILE_PX * mc::TextureAtlas::TILE_PX * 4;
+        int magenta_tiles = 0;
+        for (int t = 0; t < atlas.num_layers(); ++t) {
+            int i = t * tile_bytes;
+            if (alb[i] == 255 && alb[i + 1] == 0 && alb[i + 2] == 255) {
+                std::printf("MAGENTA TILE: %d\n", t);
+                ++magenta_tiles;
+            }
+        }
+        if (magenta_tiles > 0) ok = false;
+    }
+
     int layers = atlas.num_layers();
     int tile = mc::TextureAtlas::TILE_PX;
     int rows = (layers + kCols - 1) / kCols;
     int sheet_w = kCols * kCellPx, sheet_h = rows * kCellPx;
 
-    auto ok = true;
     // Albedo RGB plus grayscale channel views (roughness, emissive, height).
     ok &= write_png(out_path("atlas_albedo.png"), compose_sheet(atlas.albedo_data(), layers, tile, kScale, true), sheet_w, sheet_h);
     ok &= write_png(out_path("atlas_roughness.png"), compose_sheet(to_gray(atlas.specular_data(), 0), layers, tile, kScale, true), sheet_w, sheet_h);
@@ -334,7 +351,7 @@ int main(int argc, char** argv) {
     // Item icon atlas: 32px cells at 4x -> 128px cells.
     mc::ItemIcons icons;
     icons.generate(atlas);
-    int icon_cells = static_cast<int>(mc::BLOCK_COUNT) + (static_cast<int>(mc::ITEM_COUNT) - 256);
+    int icon_cells = icons.rows() * mc::ItemIcons::ATLAS_COLS;
     int irows = (icon_cells + kCols - 1) / kCols;
     int isheet_w = kCols * mc::ItemIcons::ICON_PX * 4;
     int isheet_h = irows * mc::ItemIcons::ICON_PX * 4;

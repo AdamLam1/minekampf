@@ -6,6 +6,8 @@ uniform sampler2D u_depth_tex;
 uniform sampler2DShadow u_shadow_map;
 
 uniform vec3 u_sun_dir;
+uniform vec3 u_fog_color;   // must match the sky shader's horizon color, or
+                            // distant water and the sky seam with a hard line
 uniform mat4 u_view_proj;
 uniform mat4 u_inv_view_proj;
 uniform vec3 u_camera_pos;
@@ -204,8 +206,8 @@ void main() {
             // features — at night fog must fall to near-black, otherwise the
             // distant sun-facing slopes glow warm with no source.
             float day = smoothstep(-0.12, 0.10, u_sun_dir.y);
-            vec3 fog_color = mix(vec3(0.65, 0.80, 0.95), vec3(1.0, 0.7, 0.4),
-                                 max(0.0, dot(view_dir, u_sun_dir)));
+            vec3 fog_color = mix(u_fog_color, vec3(1.0, 0.7, 0.4),
+                                 max(0.0, dot(view_dir, u_sun_dir)) * 0.6);
             fog_color = mix(vec3(0.02, 0.03, 0.05), fog_color, day);
             col = mix(col, fog_color, fog_factor);
         }
@@ -214,11 +216,13 @@ void main() {
         col = vec3(0.05, 0.4, 0.6);
     }
     
-    // Tone mapping with a gentle saturation lift for a stylized look.
-    // NOTE: albedo textures are authored in sRGB and sampled without linear
-    // conversion, so NO extra gamma pass here — it would wash everything out.
+    // Tone mapping with a stronger stylized saturation lift — the voxel look
+    // lives on saturated albedo against a readable sky; ACES alone desaturates
+    // bright terrain into chalk.
     col = aces_tonemap(col * 1.12);
     float luminance = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col = mix(vec3(luminance), col, 1.12);
+    col = mix(vec3(luminance), col, 1.20);
+    // Gentle S-curve for contrast without crushing either end.
+    col = col * col * (3.0 - 2.0 * col) * 0.35 + col * 0.65;
     frag = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
