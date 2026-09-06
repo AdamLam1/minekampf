@@ -10,6 +10,7 @@ Hybryda Minecraft + Hytale pisana w C++20 / OpenGL 4.6 — voxelowy świat z pip
 - **Pipeline graficzny shaderpack-style**: mapa cieni 4096 z soft-PCF (obracany dysk), POM na teksturach, SSR na wodzie, Fresnel + poświata słońca, cumulusy z samocieniowaniem, księżyc/gwiazdy, god rays, SSAO, bloom, ACES tonemapping, kolorowe światło (ciepłe pochodnie z flickerem, złota godzina, nocny ambient księżycowy).
 - **Presety jakości**: `/quality low|medium|high` (rozmiar mapy cieni, zasięg, tapki PCF, POM, SSR, chmury) — także w panelu opcji.
 - **Moby**: Blockbench (`.geo.json`) → proceduralne rigi z animacją chodu/ataku.
+- **Multiplayer (co-op 2–8 graczy, w toku — gałąź `feature/multiplayer`)**: listen server (host autorytatywny), streaming chunków (sekcje paletowe + zlib), zdalni gracze z interpolacją (proceduralny humanoid), synchronizacja bloków (batch per tick + interest management), czat i sync czasu. Menu *Multiplayer → Hostuj/Dołącz*; CLI: `--host [port]`, `--join <ip> <port> <nick>`.
 - **Narzędzia testowe**: E2E przez API automatyzacji TCP (`--auto-play --automation-port`), testy pikselowe (`scripts/shader_test.py`, `graphics_test.py`, `visual_test.py`), testy gameplay (`auto_test.py`, 84 asercje), 168 testów jednostkowych.
 
 ## Budowanie
@@ -30,6 +31,8 @@ Binarka ląduje w `game/build/release/bin/minekampf.exe` (shadery/assety kopiowa
 ```bash
 cd game
 python scripts/auto_test.py      # 84 asercje gameplay przez API automatyzacji
+python scripts/mp_test.py        # E2E multiplayer: dwie instancje (host + klient)
+python scripts/mp_sync_test.py   # głęboki sync multiplayer: pozycje graczy, akcje bloków, czat
 python scripts/shader_test.py    # woda/Fresnel/glinty/cienie — asercje pikselowe
 python scripts/graphics_test.py  # pochodnia/tekstury/woda
 python scripts/visual_test.py    # HUD, dzień/noc, wydajność
