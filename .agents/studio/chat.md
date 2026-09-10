@@ -45,3 +45,41 @@ Zmiany w chunk.frag / post.frag / renderer.cpp (pełna tabela i uzasadnienia: `.
 - Noc i dzień zweryfikowane zrzutami (`.agents/studio/*.png`): las nasycony, cienie czytelne, woda klarowna.
 - **Fala 2 gotowa do wzięcia** (patrz research §4): tinted shadows (Hytale), cząsteczki deszczu (teraz czarne kwadraciki — BlockDust bez blendu), `player.bbmodel` (proceduralny humanoid nadal jako fallback, log: „no model for player") → technical-artist; ewent. zachód słońca grade → engine-dev.
 - asset_dump.cpp: naprawiony rozmiar sheeta ikon (`icons.rows()*ATLAS_COLS`), eksport znowu działa (`minekampf_assets.exe <dir>`).
+
+## [2026-09-06 15:30] studio-head → @wszyscy | [FYI] | Fala 3 zakończona: font, światło, worldgen, mechaniki, audio
+Pełny raport: `.agents/studio/worldgen_report.md`. Bramki: build OK, **210/210 unit, 84/84 auto_test** (wszystkie 6-7 starych faili wygasło — w tym quest_npc_present i portal), 7/7 visual, 6/6 shader, 5/5 graphics, perf OK (mspt 0.3–1.0). Praca **NIEskomitowana** — czeka na decyzję użytkownika.
+- **@engine-dev / @level-designer**: świat jest teraz **32×32 chunków** (`WORLD_CHUNK_HALF=16`), skale szumu klimatu ×2, wilgotność rozciągnięta (*0.75+0.5) — stąd nowe rozkłady biomów (wioski/dungeony bez zmian pozycyjnych). Stare zapisy kompatybilne. Beach ~25% — wave-4 kandydat (3D density, oceany).
+- **@ui-designer**: Silkscreen NIE MA polskich glifów w cmap (≥U+0100 renderował się jako .notdef box!) — naprawione przez komponowanie akcentów w rasterizerze (`ui.cpp::overlay_polish_accents`); drabinka rasterów 10–48 px (koniec rozmytych tytułów). Teksty UI mogą swobodnie używać „ĄĆĘŁŃÓŚŹŻ" (quests.json już używa). Bold dostępny (`draw_text(..., bold=true)`), ale ‚M' Bolda czyta się jak ‚H' — tytuły celowo na Regular.
+- **@audio-designer**: SoundManager wreszcie żywy — facade `audio/sound_events.hpp` (`sfx_.dig(block,pos)`, `sfx_.rain(intensity,pos)`...), 18 plików z `scripts/gen_sounds.py` (syntezowane, deterministyczne). Do wzięcia: wariancje per event, muzyka eventowa, bloki dźwiękowe biome'ów.
+- **@gameplay-dev**: `survival::tick_environment` (fall/drown/lava) czyste + testowane (`tests/test_environment.cpp`), wiring w ticku gracza. Klasy Axe/Shovel liczone w mining.hpp od dawna, ale itemów/receptur brak — w kolejce. Zbroje: sloty 36-39 + HUD gotowe, itemów brak.
+## [2026-09-06 18:20] perf-engineer → @wszyscy | [FYI] | Sesja FPS/płynność: GPU 70→6-8 ms/klatkę, przyczyna+fix
+Użytkownik zgłosił „ścina i mało fps". Pomiary (nowa instrumentacja w `get_state`: fps, frame_ms, **frame_ms_max** = jitter, frame_breakdown CPU, **gpu_breakdown** z GL timer queries) wykazały:
+1. **Shadow pass = 43 ms GPU** (99% klatki): rysował ~200 chunków w pierścieniu 128 bloków, podczas gdy ortho box cieni to 128×128 — reszta wyrzucana po shaderze wierzchołków. Fix: exact AABB-vs-light-frustum test + extent 48 + **inkrementalny, budżetowany pass** (max 64 drawów/klatkę do trwałej mapy; pełny restart tylko przy kroku słońca ~2.9° lub przesunięciu kotwicy 32 bloki) — znika piła 20+ ms co 4. klatkę.
+2. **Greedy merge był wyłączony dla powierzchni tintowanych** (komparator porównywał wartości tintu; po fali 3 tint liczony jest per-narożnik, więc wartości są nieistotne) — fix przywraca merged mega-quady.
+3. GL debug context + synchronous callback = wolna ścieżka AMD → wyłączone.
+4. Streaming: inserty 8→5/tick, uploady 6→3/klatkę (anty-jitter).
+Wynik na setupie użytkownika (DisplayLink USB = hard cap ~30 fps na swapie, poza grą): **steady 12→31-32 fps, jitter 90→34 ms; orbita 12→25 fps**. Na monitorze podpiętym bezpośrednio gra potrzebuje teraz ~6-8 ms GPU/klatkę (było ~70).
+@engine-dev: per-draw koszt AMD GL ~0.2 ms → **multi-draw/MDI** (wspólny bufor geometrii chunków) to następny wielki krok — wiersz w kolejce na tablicy.
+## [2026-09-07 23:30] perf-engineer → @wszyscy | [FYI] | Sesja 2: render scale, compact vertices, cienie chmur
+Dokrętki po drugiej rundzie (wszystkie bramki zielone, 84/84):
+- **`/render_scale 0.5-1.0`** (OptiFine): świat renderowany w skali, UI natywny; zapisywany w settings.cfg. Na fragment-bound setupach to główna dźwignia fps.
+- **Compact vertex 32→24 B** (Sodium): pozycje światowe jako 3×i16 (lossless), uv u16 (1/4096 bloku), metadane bajty — chunk.vert rozpakowuje. VRAM/bandwidth -25%. UWAGA: pozycje są ŚWIATOWE (ujemne!) — nie pakować do u8.
+- **Cienie chmur** w chunk.frag (fbm dryfujący z warstwą cumulus, przyciemnia tylko direct sun) — detale głębi za ~0.3 ms.
+- `graphics_test.py`: torch rig i leaf rig są teraz deterministyczne (budowane nad wodą; stary „goto forest” łamał się na seedach z cherry grove). `get_state` ma `frame_ms_max` (jitter).
+## [2026-09-07 23:59] engine-dev → @wszyscy | [FYI] | Naprawa: pochodnie bujały się jak trawa
+Przyczyna: wszystkie bloki „krzyżowe" (cross) dostawały `face = 30` = materiał foliage z wiatrem w chunk.vert. Fix: nowy materiał **40 = statyczny cross** — kołysze się tylko wysoka trawa i kwiaty (BLOCK_TALL_GRASS/YELLOW_FLOWER/RED_FLOWER); pochodnia, redstone torch, quest NPC i przyszłe techniczne crossy stoją nieruszanie. `chunk.frag` traktuje mat 4 jak foliage (bez POM na crossach). Zweryfikowane diffem pikseli w czasie (pochodnia statyczna, trawa kołysze się).
+
+- F3 overlay: naprawiony podwójny toggle (najczęstsza przyczyna „F3 nic nie pokazuje”).
+## [2026-09-10 18:40] perf-engineer + ui-designer → @wszyscy | [FYI] | Naprawa światła (pochodnia/słońce) + niewidoczne teksty w panelu OPCJE
+UserScreenshots: pochodnia zamieniała korytarz w przepalony kremowy blob (tekstura znikała). Research (BSL/Complementary) → vanilla falloff jest EKSPONENCJALNY (~0.8/level), nasz pow(bl,1.45) trzymał wszystko przy maksimum. Zmiany w chunk.frag/post.frag:
+- falloff: `pow(0.82, (1-bl)*15)` zamiast `pow(bl,1.45)` — widoczny gradient, tekstura wraca,
+- torch_col (1.0,0.80,0.58) → (1.0,0.72,0.45) — bursztyn zamiast kremu,
+- dir_light ceiling 1.30 → 1.18 (piasek przy południu nie jest już biały),
+- bloom threshold 1.2→1.35, siła 0.5→0.35; exposure lift 1.12→1.0; S-curve 0.35→0.25.
+UI: **panel OPCJE miał jasne teksty (224/215-225-240) na jasnym szarym panelu = niewidoczne** (etykiety suwaków, przełączników, statystyki zakładki Gra). Wszystkie teksty panelowe → ciemne (45-75); `ui.button_dark()` dla przycisków na panelach. NOWE: suwak „Skala renderowania” w zakładce Grafika (settings.render_scale, to samo co /render_scale).
+@ui-designer: zasada — tekst na draw_glass_panel = ciemny atrament; jasny tylko na ciemnym tle.
+
+
+@qa-lead: `graphics_test.py` torch rig podniesiony nad teren (nowe biomy go zasłaniały przy niektórych seedach) i settle 7 s (uploady 3/klatkę); `get_state` ma teraz `frame_ms_max` — użyteczne do testów płynności.
+
+- @qa-lead: nowe narzędzia debugowe: `/gotobiome <biome>` (spiral scan + histogram częstości biomów przy niepowodzeniu + wychodzi z koron drzew), `/weather clear|rain|thunder` (rampa ~1 s), `/tppyramid`. auto_test.py: oczekiwania modów/questów zaktualizowane (10 questów, tytuły z polskimi znakami). 2 bugi MP z mojego wątku powyżej nadal [OPEN].

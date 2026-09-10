@@ -67,6 +67,10 @@ private:
     [[nodiscard]] BlockId ore_at(int world_x, int world_y, int world_z, int terrain_top) const;
     void place_tree(Chunk& chunk, int tx, int tz, int surface_y, Biome biome, Rng& rng) const;
     void place_acacia(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const;
+    void place_cherry(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const;
+    void place_jungle(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const;
+    void place_swamp_oak(Chunk& chunk, int tx, int tz, int surface_y, Rng& rng) const;
+    void carve_caves(Chunk& chunk) const;
 
     uint64_t seed_;
     PerlinNoise continentalness_;

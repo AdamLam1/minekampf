@@ -11,6 +11,30 @@ in vec3 v_normal;
 in vec3 v_tangent;
 in vec3 v_bitangent;
 in vec3 v_world_pos;
+
+// Drifting cloud-shadow noise (2D fbm, matches the sky cumulus drift).
+float cloud_hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+float cloud_noise(vec2 x) {
+    vec2 p = floor(x);
+    vec2 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(cloud_hash(p), cloud_hash(p + vec2(1.0, 0.0)), f.x),
+               mix(cloud_hash(p + vec2(0.0, 1.0)), cloud_hash(p + vec2(1.0, 1.0)), f.x), f.y);
+}
+float cloud_fbm(vec2 x) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 3; ++i) {
+        v += a * cloud_noise(x);
+        x = x * 2.13 + vec2(37.0);
+        a *= 0.5;
+    }
+    return v;
+}
 in vec4 v_frag_pos_light_space;
 in vec4 v_clip;
 
@@ -158,7 +182,8 @@ void main() {
     vec3 uv = v_uv;
     // Parallax only up close, facing the surface, and never on foliage/water —
     // at glancing angles it degenerates into streaks.
-    bool is_foliage = (v_mat_type == 3.0) || (abs(uv.z - 9.0) < 0.5);
+    bool is_foliage = (v_mat_type == 3.0) || (v_mat_type == 4.0) ||
+                      (abs(uv.z - 9.0) < 0.5);
     if (v_dist < u_pom_dist && v_mat_type != 1.0 && !is_foliage &&
         dot(normalize(v_normal), view_dir) > 0.35) {
         uv.xy = parallax_mapping(uv, view_dir_ts);
@@ -252,9 +277,18 @@ void main() {
     // Specular is a METAL/WATER feature only (shaderpack matte terrain):
     // dielectric GGX sheen from F0=0.04 is exactly what made every block read
     // as glass. Non-metals render pure diffuse like vanilla + BSL terrain.
-    float dir_light = mix(0.85, 1.30, final_sun_exposure)
+    float dir_light = mix(0.85, 1.18, final_sun_exposure)
                     * clamp(u_sky_brightness + 0.15, 0.0, 1.0)
                     * face_shade;
+    // Cloud shadows: drifting fbm darkens the DIRECT sun component only (the
+    // ambient stays), so terrain keeps depth while nothing goes pitch-black.
+    // Same drift direction/speed family as the sky cumulus layer.
+    {
+        vec2 cs_uv = v_world_pos.xz * 0.0042 + vec2(u_time * 0.030, u_time * 0.011);
+        float cs = cloud_fbm(cs_uv);
+        float cloud_shadow = smoothstep(0.52, 0.72, cs) * final_sun_exposure;
+        dir_light *= mix(1.0, 0.55, cloud_shadow);
+    }
     // Foliage crosses have no meaningful face normal — light them like the
     // terrain around them instead of a downward-facing cube side.
     if (is_foliage) dir_light = 1.0;
@@ -267,13 +301,15 @@ void main() {
                   + 0.022 * sin(u_time * 7.0)
                   + 0.014 * sin(u_time * 12.3 + 1.7)
                   + 0.008 * sin(u_time * 21.7 + 4.1);
-    // Warm but not orange: at (1.0, 0.62, 0.32) torch-lit stone read as
-    // brown mush — walls lost all their own color indoors.
-    vec3 torch_col = vec3(1.00, 0.80, 0.58) * flicker;
-    // Torch falloff curve: raw lightmap is linear (14..0) which reads FLAT
-    // indoors; a 1.45 gamma makes pools of light near the torch and real
-    // darkness a few blocks away.
-    float bl_curved = pow(block_light, 1.45);
+    // Warm AMBER (not cream): deeper green/blue suppression keeps the fire
+    // hue visible after tonemap; the old (1.0, 0.80, 0.58) desaturated into
+    // a milky wash once combined with bright sandstone albedo.
+    vec3 torch_col = vec3(1.00, 0.72, 0.45) * flicker;
+    // Torch falloff: vanilla Minecraft multiplies brightness by ~0.8 per
+    // light level (exponential), which reads natural — the old pow(bl, 1.45)
+    // kept everything near maximum for 10+ blocks and washed the walls into
+    // a flat cream blob. Steeper curve = visible gradient + visible texture.
+    float bl_curved = pow(0.82, (1.0 - block_light) * 15.0);
     // Warm grade folds in sun PRESENCE: with the sun below the horizon there
     // is no warm direct light — otherwise the whole sky-lit world glows amber
     // at night (the mysterious "beach pool").
@@ -282,6 +318,9 @@ void main() {
                          mix(vec3(1.00, 0.70, 0.48), vec3(1.0), clamp(u_sun_dir.y * 2.4, 0.0, 1.0)),
                          sun_presence);
     vec3 day_col = vec3(0.86, 0.93, 1.04) * sun_grade;
+    // Cast shadows tint the lit component toward cool violet (skylight-only
+    // look, Hytale-style) — the violet ambient floor alone reads too flat.
+    day_col = mix(day_col, day_col * vec3(0.80, 0.78, 1.12), shadow * sun_up);
     vec3 light_col = max(torch_col * bl_curved, day_col * (sky_light * dir_light));
     // Stylized ambient floor: soft in daylight so shadows stay readable;
     // at night the floor is dim MOONLIGHT BLUE instead of flat grey.

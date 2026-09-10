@@ -6,12 +6,14 @@ Hybryda Minecraft + Hytale pisana w C++20 / OpenGL 4.6 — voxelowy świat z pip
 
 ## Cechy
 
-- **Świat voxelowy**: greedy meshing, chunki 16×256×16, biomy, jaskinie, struktury (dungeons, wioski), Nether, płyny, redstone, crafting/smelting/enchanting, questy, mody (`mods/`).
+- **Świat voxelowy**: greedy meshing, chunki 16×256×16, **świat 32×32 chunków**, **13 biomów** (m.in. Jungle, Swamp, Cherry Grove, Flower Forest) z płynnymi granicami i tintami per-vertex, **jaskinie-karvery + ravines**, rudy (węgiel, żelazo, **miedź**, złoto, **lapis**, **redstone**, diament), struktury (dungeons, wioski ze studnią/ścieżkami/stodołą, **pustynne piramidy**), Nether, płyny, redstone, crafting/smelting/enchanting, **10 questów** z NPC w wioskach, mody (`mods/`).
+- **Dźwięk**: proceduralny zestaw startowy (kopanie per materiał, kroki, place, hurt, jedzenie, level-up, deszcz, ambient music) — `scripts/gen_sounds.py` → `assets/sounds/`.
+- **Przetrwanie**: głód/XP/regen + **obrażenia od upadku, topienia i lawy**; komendy `/weather`, `/gotobiome`, `/tppyramid`.
 - **Pipeline graficzny shaderpack-style**: mapa cieni 4096 z soft-PCF (obracany dysk), POM na teksturach, SSR na wodzie, Fresnel + poświata słońca, cumulusy z samocieniowaniem, księżyc/gwiazdy, god rays, SSAO, bloom, ACES tonemapping, kolorowe światło (ciepłe pochodnie z flickerem, złota godzina, nocny ambient księżycowy).
-- **Presety jakości**: `/quality low|medium|high` (rozmiar mapy cieni, zasięg, tapki PCF, POM, SSR, chmury) — także w panelu opcji.
+- **Presety jakości**: `/quality low|medium|high` (rozmiar mapy cieni, zasięg, tapki PCF, POM, SSR, chmury) — także w panelu opcji. **Render scale** `/render_scale 0.5-1.0` (świat w obniżonej rozdzielczości, UI natywny) + **cienie chmur** na terenie. F3 = overlay diagnostyczny (FPS, klatka, jitter, chunky).
 - **Moby**: Blockbench (`.geo.json`) → proceduralne rigi z animacją chodu/ataku.
 - **Multiplayer (co-op 2–8 graczy, w toku — gałąź `feature/multiplayer`)**: listen server (host autorytatywny), streaming chunków (sekcje paletowe + zlib), zdalni gracze z interpolacją (proceduralny humanoid), synchronizacja bloków (batch per tick + interest management), czat i sync czasu. Menu *Multiplayer → Hostuj/Dołącz*; CLI: `--host [port]`, `--join <ip> <port> <nick>`.
-- **Narzędzia testowe**: E2E przez API automatyzacji TCP (`--auto-play --automation-port`), testy pikselowe (`scripts/shader_test.py`, `graphics_test.py`, `visual_test.py`), testy gameplay (`auto_test.py`, 84 asercje), 168 testów jednostkowych.
+- **Narzędzia testowe**: E2E przez API automatyzacji TCP (`--auto-play --automation-port`), testy pikselowe (`scripts/shader_test.py`, `graphics_test.py`, `visual_test.py`), testy gameplay (`auto_test.py`, 84 asercje), testy jednostkowe (210).
 
 ## Budowanie
 

@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-06",
+  "scenario": "creative orbit r=60 + steady standing, world 32x32 chunks, quality high, AMD RX 6600 @1280x720, DisplayLink USB display",
+  "baseline": {
+    "fps_steady": 12,
+    "fps_orbit_median": 12,
+    "frame_ms_median": 85.6,
+    "frame_ms_max_typical": 90.0,
+    "gpu_shadow_ms_full_pass": 43.0,
+    "present_ms": 74.0
+  },
+  "after": {
+    "fps_steady": 31,
+    "fps_orbit_median": 25,
+    "frame_ms_median_steady": 32.0,
+    "frame_ms_max_median_steady": 34.0,
+    "frame_ms_max_median_orbit": 70.0,
+    "gpu_shadow_ms_per_cycle_frame": 10.5,
+    "gpu_shadow_draw_budget": 64,
+    "present_ms_displaylink_cap": 30.0
+  },
+  "changes": [
+    "shadow pass: exact AABB-vs-light-frustum culling (was: 128-block ring, verts clipped after VS)",
+    "shadow pass: incremental + frame-budgeted (max 64 chunk draws/frame) into persistent depth map; full restart only on quantized sun step (~2.9 deg) or 32-block anchor move \u2014 removes the every-4th-frame 20+ ms sawtooth",
+    "shadow ortho extent 64->48 blocks (fewer draws, higher texel density on 4096 map); radius high 96, medium 80",
+    "greedy mesh merge no longer splits on tint values (wave-3 blending had disabled merging for tinted surfaces)",
+    "GL debug context disabled + async debug delivery (AMD slow path)",
+    "streaming budgets spread: chunk inserts 8->5/tick, mesh uploads 6->3/tick (anti-jitter)",
+    "instrumentation: get_state now reports fps, frame_ms, frame_ms_max (1 s worst = jitter), CPU frame_breakdown, GPU gpu_breakdown (GL timer queries), mesh_indices, shadow_chunks, dirty_chunks, gpu name, resolution, quality, vsync",
+    "graphics_test torch rig moved above terrain + aimed by computed pitch (new-biome occlusion fix); upload settle 7 s"
+  ],
+  "notes": "User's display chain is DisplayLink USB (~30 fps swap pacing) - a hard external cap; on a directly-connected display the same build now needs only ~6-8 ms GPU/frame (was ~70). Remaining orbit hitches are worldgen/meshing churn from 60-block teleports (stress scenario; normal walking is far lighter)."
+}

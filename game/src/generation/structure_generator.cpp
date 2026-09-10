@@ -16,7 +16,24 @@ static const int DUNGEON_REGION = 8;
 static const int DUNGEON_SEPARATION = 2;
 static const uint64_t DUNGEON_SALT = 0xD06E5A1CULL;
 
+// Desert pyramid regions are sparse (one per 20x20 chunks) and desert-gated.
+static const int PYRAMID_REGION = 20;
+static const int PYRAMID_SEPARATION = 8;
+static const uint64_t PYRAMID_SALT = 0x0F1A7DULL;
+
 StructureGenerator::StructureGenerator(uint64_t seed) : seed_(seed) {}
+
+bool StructureGenerator::get_pyramid_in_region(int region_x, int region_z,
+                                               int& out_chunk_x, int& out_chunk_z) const {
+    uint64_t hash = seed_ + static_cast<uint64_t>(region_x) * 567812387711ULL +
+                    static_cast<uint64_t>(region_z) * 219647399121ULL + PYRAMID_SALT;
+    Rng rng(hash);
+    out_chunk_x = region_x * PYRAMID_REGION + PYRAMID_SEPARATION +
+                  rng.next_int(PYRAMID_REGION - 2 * PYRAMID_SEPARATION);
+    out_chunk_z = region_z * PYRAMID_REGION + PYRAMID_SEPARATION +
+                  rng.next_int(PYRAMID_REGION - 2 * PYRAMID_SEPARATION);
+    return true;
+}
 
 bool StructureGenerator::get_dungeon_in_region(int region_x, int region_z,
                                                int& out_chunk_x, int& out_chunk_z,
@@ -74,8 +91,41 @@ void StructureGenerator::generate_structures(Chunk& chunk, const WorldGenerator&
                     int vy = world_gen.terrain_height(vx, vz, dummy);
                     
                     if (vy > SEA_LEVEL && vy < MAX_Y - 20) {
+                        const int cb_x = chunk.pos.x * CHUNK_SIZE;
+                        const int cb_z = chunk.pos.z * CHUNK_SIZE;
                         // Place a house at (vx, vy, vz)
                         place_house_in_chunk(chunk, vx, vy, vz);
+
+                        // Village square: well south of the house, plank barn
+                        // east-north. Both are chunk-bounds clipped, so any
+                        // chunk they overlap renders its share during its own
+                        // generation pass (village chunks stay within the 2
+                        // chunk scan window above).
+                        Biome biome_dummy;
+                        int well_y = world_gen.terrain_height(vx, vz + 7, biome_dummy);
+                        if (well_y > SEA_LEVEL && std::abs(well_y - vy) <= 3) {
+                            place_well_in_chunk(chunk, vx, well_y, vz + 7);
+                        }
+                        int barn_x = vx + 8, barn_z = vz - 6;
+                        int barn_y = world_gen.terrain_height(barn_x, barn_z, biome_dummy);
+                        if (barn_y > SEA_LEVEL && barn_y < MAX_Y - 10 &&
+                            std::abs(barn_y - vy) <= 3) {
+                            place_barn_in_chunk(chunk, barn_x, barn_y, barn_z);
+                        }
+                        // Gravel path from the house door to the well.
+                        for (int pz2 = vz - 3; pz2 <= vz + 6; ++pz2) {
+                            for (int px2 = vx - 1; px2 <= vx + 1; ++px2) {
+                                Biome pb;
+                                int py = world_gen.terrain_height(px2, pz2, pb);
+                                if (py <= SEA_LEVEL || std::abs(py - vy) > 2) continue;
+                                int lx = px2 - cb_x;
+                                int lz = pz2 - cb_z;
+                                if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE) continue;
+                                if (chunk.get_block(lx, py, lz) == BLOCK_GRASS) {
+                                    chunk.set_block(lx, py, lz, BLOCK_GRAVEL);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -91,6 +141,25 @@ void StructureGenerator::generate_structures(Chunk& chunk, const WorldGenerator&
         if (get_dungeon_in_region(drx, drz, dcx, dcz, dfy)) {
             if (dcx == chunk_x && dcz == chunk_z) {
                 place_dungeon_in_chunk(chunk, dcx * CHUNK_SIZE + 8, dfy, dcz * CHUNK_SIZE + 8);
+            }
+        }
+    }
+
+    // ---- Desert pyramid: chunk-contained, one per sparse region, desert
+    // biome at the anchor only. ----
+    {
+        int pcx, pcz;
+        int prx = chunk_x < 0 ? (chunk_x - PYRAMID_REGION + 1) / PYRAMID_REGION : chunk_x / PYRAMID_REGION;
+        int prz = chunk_z < 0 ? (chunk_z - PYRAMID_REGION + 1) / PYRAMID_REGION : chunk_z / PYRAMID_REGION;
+        if (get_pyramid_in_region(prx, prz, pcx, pcz)) {
+            if (pcx == chunk_x && pcz == chunk_z) {
+                int ax = pcx * CHUNK_SIZE + 8;
+                int az = pcz * CHUNK_SIZE + 8;
+                Biome anchor_biome;
+                int py = world_gen.terrain_height(ax, az, anchor_biome);
+                if (anchor_biome == Biome::Desert && py > SEA_LEVEL + 2 && py < MAX_Y - 16) {
+                    place_pyramid_in_chunk(chunk, ax, py, az);
+                }
             }
         }
     }
@@ -195,6 +264,102 @@ void StructureGenerator::place_house_in_chunk(Chunk& chunk, int origin_x, int or
         origin_y + 1 < MAX_Y) {
         chunk.set_block(npc_lx, origin_y + 1, npc_lz, BLOCK_QUEST_NPC);
     }
+}
+
+void StructureGenerator::place_barn_in_chunk(Chunk& chunk, int origin_x, int origin_y,
+                                             int origin_z) const {
+    int cb_x = chunk.pos.x * CHUNK_SIZE;
+    int cb_z = chunk.pos.z * CHUNK_SIZE;
+    const int min_x = origin_x - 3, max_x = origin_x + 3;
+    const int min_z = origin_z - 2, max_z = origin_z + 2;
+    const int floor_y = origin_y, roof_y = origin_y + 3;
+
+    for (int y = floor_y; y <= roof_y; ++y) {
+        if (y < MIN_Y || y >= MAX_Y) continue;
+        for (int z = min_z; z <= max_z; ++z) {
+            for (int x = min_x; x <= max_x; ++x) {
+                if (x < cb_x || x >= cb_x + CHUNK_SIZE || z < cb_z || z >= cb_z + CHUNK_SIZE) continue;
+                const int lx = x - cb_x;
+                const int lz = z - cb_z;
+                BlockId b;
+                if (y == floor_y) b = BLOCK_COBBLESTONE;                     // floor
+                else if (y == roof_y) b = BLOCK_OAK_LOG;                     // beam roof
+                else if (x == min_x || x == max_x || z == min_z || z == max_z) {
+                    // Wide doorway on the -Z wall, solid plank walls elsewhere.
+                    b = (z == min_z && std::abs(x - origin_x) <= 1) ? BLOCK_AIR
+                                                                    : BLOCK_OAK_PLANKS;
+                } else {
+                    b = BLOCK_AIR;
+                }
+                chunk.set_block(lx, y, lz, b);
+            }
+        }
+    }
+}
+
+void StructureGenerator::place_well_in_chunk(Chunk& chunk, int center_x, int center_y,
+                                             int center_z) const {
+    int cb_x = chunk.pos.x * CHUNK_SIZE;
+    int cb_z = chunk.pos.z * CHUNK_SIZE;
+    auto set = [&](int x, int y, int z, BlockId b) {
+        if (x < cb_x || x >= cb_x + CHUNK_SIZE || z < cb_z || z >= cb_z + CHUNK_SIZE) return;
+        if (y < MIN_Y || y >= MAX_Y) return;
+        chunk.set_block(x - cb_x, y, z - cb_z, b);
+    };
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const bool rim = (std::abs(dx) == 1 || std::abs(dz) == 1);
+            set(center_x + dx, center_y, center_z + dz, rim ? BLOCK_COBBLESTONE : BLOCK_WATER);
+            set(center_x + dx, center_y - 1, center_z + dz, BLOCK_COBBLESTONE);
+        }
+    }
+    // Corner posts + a roof slab so the well reads as a structure, not a puddle.
+    for (int dy = 1; dy <= 2; ++dy) {
+        set(center_x - 1, center_y + dy, center_z - 1, BLOCK_OAK_LOG);
+        set(center_x + 1, center_y + dy, center_z - 1, BLOCK_OAK_LOG);
+        set(center_x - 1, center_y + dy, center_z + 1, BLOCK_OAK_LOG);
+        set(center_x + 1, center_y + dy, center_z + 1, BLOCK_OAK_LOG);
+    }
+    for (int dx = -1; dx <= 1; ++dx) {
+        for (int dz = -1; dz <= 1; ++dz) {
+            set(center_x + dx, center_y + 3, center_z + dz, BLOCK_OAK_PLANKS);
+        }
+    }
+}
+
+void StructureGenerator::place_pyramid_in_chunk(Chunk& chunk, int center_x, int base_y,
+                                                int center_z) const {
+    int cb_x = chunk.pos.x * CHUNK_SIZE;
+    int cb_z = chunk.pos.z * CHUNK_SIZE;
+    auto set = [&](int x, int y, int z, BlockId b) {
+        if (x < cb_x || x >= cb_x + CHUNK_SIZE || z < cb_z || z >= cb_z + CHUNK_SIZE) return;
+        if (y < MIN_Y || y >= MAX_Y) return;
+        chunk.set_block(x - cb_x, y, z - cb_z, b);
+    };
+
+    // Stepped tiers: 9x9, 7x7, 5x5, 3x3, cap.
+    const int tiers[5] = {9, 7, 5, 3, 1};
+    for (int t = 0; t < 5; ++t) {
+        const int half = tiers[t] / 2;
+        const int y = base_y + t;
+        for (int dz = -half; dz <= half; ++dz) {
+            for (int dx = -half; dx <= half; ++dx) {
+                set(center_x + dx, y, center_z + dz, BLOCK_SANDSTONE);
+            }
+        }
+    }
+
+    // Buried treasure chamber under the cap: 3x3 hollow with gold floor and a
+    // diamond prize on a pedestal.
+    const int cy = base_y;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            set(center_x + dx, cy, center_z + dz, BLOCK_COBBLESTONE); // chamber floor
+            set(center_x + dx, cy + 1, center_z + dz, BLOCK_AIR);     // chamber air
+        }
+    }
+    set(center_x, cy + 1, center_z, BLOCK_GOLD_ORE);      // pedestal
+    set(center_x, cy + 2, center_z, BLOCK_DIAMOND_ORE);   // the prize
 }
 
 } // namespace mc

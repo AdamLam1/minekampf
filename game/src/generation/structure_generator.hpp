@@ -28,6 +28,9 @@ public:
     // Checks if a region at (region_x, region_z) contains a village and returns its chunk position.
     bool get_village_in_region(int region_x, int region_z, int& out_chunk_x, int& out_chunk_z) const;
 
+    // Desert pyramid placement (own sparse region grid, desert biome only).
+    bool get_pyramid_in_region(int region_x, int region_z, int& out_chunk_x, int& out_chunk_z) const;
+
     // Buried mob-grinder room: one per dungeon region, at a deterministic
     // deep-Y position. Fully dark interior so the natural spawner populates
     // it (underground spawns are darkness-gated, not time-gated).
@@ -39,6 +42,16 @@ private:
 
     // Generates a house at the specified origin block position.
     void place_house_in_chunk(Chunk& chunk, int origin_x, int origin_y, int origin_z) const;
+
+    // Second village building: 6x5 plank barn, chunk-bounds clipped.
+    void place_barn_in_chunk(Chunk& chunk, int origin_x, int origin_y, int origin_z) const;
+
+    // 3x3 cobblestone well with a water core (village square centerpiece).
+    void place_well_in_chunk(Chunk& chunk, int center_x, int center_y, int center_z) const;
+
+    // Stepped sandstone pyramid with a buried treasure chamber; the whole
+    // footprint fits inside one chunk by construction.
+    void place_pyramid_in_chunk(Chunk& chunk, int center_x, int base_y, int center_z) const;
 
     // 11x11x6 buried room centered on (center_x, floor_y, center_z); the
     // whole footprint fits inside one chunk by construction.

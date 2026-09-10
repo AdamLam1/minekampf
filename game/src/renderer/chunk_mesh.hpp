@@ -31,6 +31,21 @@ struct ChunkMeshData {
     ChunkPos pos;
 };
 
+// GPU-side vertex, Sodium-style compact layout (24 bytes vs 32 of Vertex).
+// Positions are whole-block WORLD coordinates (range fits i16 comfortably),
+// stored as 3x int16 — lossless. UVs span [0,16] tile units (greedy repeats)
+// and are quantized to u16 each — 4x finer than one texel. The rest is the
+// old metadata (tile, lights, face, tint) as bytes.
+struct PackedVertex {
+    int16_t x, y, z;
+    uint16_t pad_pos;
+    uint32_t uv;    // u(16) v(16), quantized uv/16*65535
+    uint8_t tile, bl, sl, ao;
+    uint8_t face, r, g, b;
+    uint8_t a, pad0, pad1, pad2;
+};
+static_assert(sizeof(PackedVertex) == 24, "PackedVertex must be 24 bytes");
+
 // GPU-side mesh for one chunk (opaque + transparent passes).
 struct GpuMesh {
     uint32_t vao = 0;

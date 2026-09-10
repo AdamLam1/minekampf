@@ -98,4 +98,55 @@ int eat_from_selected(Player& p) {
     return food->nutrition;
 }
 
+EnvironmentTickResult tick_environment(Player& p, const EnvironmentTickInput& in) {
+    EnvironmentTickResult r;
+
+    if (in.creative_exempt) {
+        p.fall_distance = 0.0f;
+        p.breath = 300;
+        p.drown_timer = 0;
+        p.lava_timer = 0;
+        return r;
+    }
+
+    // --- Fall tracking -----------------------------------------------------
+    if (in.in_water || p.flying) {
+        p.fall_distance = 0.0f;
+    } else if (in.fall_speed > 0.0f && !in.on_ground) {
+        p.fall_distance += in.fall_speed;
+    } else if (in.just_landed) {
+        // Vanilla-style curve: the first 3 blocks are free, 1 HP per block after.
+        r.fall_damage = std::max(0.0f, std::floor(p.fall_distance - 3.0f));
+        p.fall_distance = 0.0f;
+    } else if (in.on_ground) {
+        p.fall_distance = 0.0f;
+    }
+
+    // --- Breath / drowning ---------------------------------------------------
+    if (in.head_in_water) {
+        if (p.breath > 0) {
+            --p.breath;
+        } else if (++p.drown_timer >= 20) {
+            p.drown_timer = 0;
+            r.drown_damage = 1.0f;
+        }
+    } else {
+        p.breath = 300;
+        p.drown_timer = 0;
+    }
+
+    // --- Lava ------------------------------------------------------------------
+    if (in.body_in_lava) {
+        // 2 HP per second: burn every 20 ticks (EnvironmentTest contract).
+        if (++p.lava_timer >= 20) {
+            p.lava_timer = 0;
+            r.lava_damage = 2.0f;
+        }
+    } else {
+        p.lava_timer = 0;
+    }
+
+    return r;
+}
+
 } // namespace mc::survival

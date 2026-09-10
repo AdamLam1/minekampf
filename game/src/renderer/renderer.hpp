@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string_view>
 #include <unordered_map>
@@ -61,6 +63,32 @@ public:
     bool save_screen_bmp(const std::string& path) const;
 
     void set_sky_brightness(float b) { sky_brightness_ = b; }
+    // GPU identifier captured once at init (perf reports / automation).
+    [[nodiscard]] const std::string& gpu_name() const { return gpu_name_; }
+
+    // OptiFine-style render scale: world FBOs render at scale * window size,
+    // then the post pass upscales to the full window (UI stays native).
+    // 0.5 = quarter fragment cost for every fragment-bound effect.
+    void set_render_scale(float s) {
+        render_scale_ = std::clamp(s, 0.4f, 1.0f);
+        fbo_dims_dirty_ = true;
+    }
+    [[nodiscard]] float render_scale() const { return render_scale_; }
+    [[nodiscard]] int fbo_width() const { return fbo_w_; }
+    [[nodiscard]] int fbo_height() const { return fbo_h_; }
+
+    // GPU-side pass timings (GL timer queries, one frame lag; ms, last value).
+    enum class GpuSection : uint8_t { Shadow, Opaque, Sky, Transparent, Post, Count };
+    [[nodiscard]] float gpu_ms(GpuSection s) const { return gpu_ms_[static_cast<size_t>(s)]; }
+
+    // Mesh stats for perf tooling: total indices across loaded chunk meshes
+    // and how many chunks the last shadow pass actually drew.
+    [[nodiscard]] uint64_t total_mesh_indices() const;
+    [[nodiscard]] int last_shadow_chunks() const { return last_shadow_chunks_; }
+    // Weather gray-out: 0 = clear, 1 = full storm. Sky/fog colors mix toward
+    // flat grey-blue in addition to the brightness scale, so rain reads as
+    // overcast rather than a slightly dimmer sunny day.
+    void set_weather_darkness(float d) { weather_darkness_ = d; }
     // Mining crack overlay: draw destroy-stage cracks on the block being mined
     // (progress 0..1 picks the stage tile; progress <= 0 disables the overlay).
     void set_mining_overlay(BlockPos pos, float progress) {
@@ -170,6 +198,44 @@ private:
     int width_ = 0;
     int height_ = 0;
     float sky_brightness_ = 1.0f;
+    std::string gpu_name_;
+    float render_scale_ = 1.0f;
+    int fbo_w_ = 0;
+    int fbo_h_ = 0;
+    bool fbo_dims_dirty_ = true;
+
+    struct GpuSlot {
+        // Ring of queries (shadow pass runs every N frames, so results lag
+        // multiple frames; poll the whole ring, keep the freshest value).
+        unsigned int q[4] = {0, 0, 0, 0};
+        uint32_t head = 0;
+        float last_ms = 0.0f;
+    };
+    std::array<GpuSlot, static_cast<size_t>(GpuSection::Count)> gpu_slots_{};
+    std::array<float, static_cast<size_t>(GpuSection::Count)> gpu_ms_{};
+    int last_shadow_chunks_ = 0;
+    // Shadow-map update throttling: the sun and terrain move slowly, so the
+    // depth map is re-rendered only every N frames (or immediately after a
+    // large camera jump). light_space_matrix_ stays paired with the map.
+    // Half-extent (blocks) of the shadow ortho box around its center. Small
+    // extent = fewer chunk draws per refresh = smaller frame-time spike; the
+    // 4096² map over ~96 blocks is plenty of texel density.
+    float shadow_extent_ = 48.0f;
+    // Smooth shadow updates: the depth map is a persistent target redrawn
+    // incrementally (max shadow_draw_budget_ chunks per frame, cycling
+    // through the candidate list). A full clear+restart happens only when
+    // the quantized sun direction or the camera anchor moves materially —
+    // the map then refills over the next few frames. This keeps per-frame
+    // driver draw cost bounded (AMD GL: ~0.2 ms/draw) so no frame spikes.
+    std::vector<ChunkPos> shadow_queue_;
+    bool shadow_cycle_active_ = false;
+    int shadow_draw_budget_ = 64;
+    float last_shadow_sun_angle_ = 1e9f;
+    glm::vec3 last_shadow_anchor_ = glm::vec3(0.0f);
+    glm::vec3 last_shadow_camera_ = glm::vec3(0.0f);
+    void gpu_begin(GpuSection s);
+    void gpu_end(GpuSection s);
+    float weather_darkness_ = 0.0f;
     float sun_angle_ = 0.0f;
     int fog_mode_ = 0;
     float fog_density_ = 0.0f;

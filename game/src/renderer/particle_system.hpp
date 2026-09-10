@@ -18,7 +18,8 @@ enum class ParticleType {
     BlockDust,
     Smoke,
     Flame,
-    WaterDrip
+    WaterDrip,
+    RainStreak // world-vertical falling streak, faded at the tail
 };
 
 struct Particle {

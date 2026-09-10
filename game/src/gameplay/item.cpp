@@ -41,6 +41,9 @@ constexpr std::array<ItemProperties, ITEM_COUNT> build_table() {
     table[ITEM_BOW] = {"bow", 1, 384};
     table[ITEM_ARROW] = {"arrow", 64, 0};
     table[ITEM_BOOK] = {"book", 64, 0};
+    table[ITEM_RAW_COPPER] = {"raw_copper", 64, 0};
+    table[ITEM_REDSTONE] = {"redstone", 64, 0};
+    table[ITEM_LAPIS] = {"lapis", 64, 0};
     table[ITEM_WOODEN_SWORD] = {"wooden_sword", 1, 59};
     table[ITEM_STONE_SWORD] = {"stone_sword", 1, 131};
     table[ITEM_IRON_SWORD] = {"iron_sword", 1, 250};

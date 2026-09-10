@@ -71,19 +71,21 @@ struct ZombieScenario {
     explicit ZombieScenario(const Vec3& zombie_pos) : players{player_pos} {
         auto chunk = World::chunk_pool.acquire();
         chunk->reset({0, 0});
-        WorldGenerator gen(12345);
-        gen.generate(*chunk);
+        // Flat synthetic ground instead of a generated chunk: AI tests must
+        // exercise pathing/biting, not chase a moving worldgen output (biome
+        // rebalances kept reshaping the terrain under the spawn column).
+        for (int lz = 0; lz < CHUNK_SIZE; ++lz) {
+            for (int lx = 0; lx < CHUNK_SIZE; ++lx) {
+                chunk->set_block(lx, 69, lz, BLOCK_GRASS);
+            }
+        }
         world.insert_chunk(std::move(chunk));
 
+        // Player stands 3 blocks away on X, on the flat ground (feet at y=70).
+        (void)zombie_pos;
+        players[0] = Vec3(6.5f, 70.0f, 6.5f);
         Rng rng(7);
-        int ox, oz, oy;
-        bool ok = find_open_spot(static_cast<int>(zombie_pos.x),
-                                 static_cast<int>(zombie_pos.z), ox, oz, oy);
-        (void)ok;
-        // Player stands on the same open ground, 3 blocks away on X.
-        players[0] = Vec3(static_cast<float>(ox) + 0.5f - 3.0f,
-                          static_cast<float>(oy),
-                          static_cast<float>(oz) + 0.5f);
+        int ox = 9, oz = 6, oy = 70;
         zombie = MobSpawner{}.spawn_forced(MobCategory::Monster,
                                            BlockPos(ox, oy, oz),
                                            rng, MobType::Zombie);

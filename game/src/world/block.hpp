@@ -108,8 +108,15 @@ inline constexpr BlockId BLOCK_REPEATER_OFF = 82;
 inline constexpr BlockId BLOCK_REPEATER_ON = 83;
 inline constexpr BlockId BLOCK_ACACIA_LOG = 84;
 inline constexpr BlockId BLOCK_ACACIA_LEAVES = 85;
+inline constexpr BlockId BLOCK_CHERRY_LOG = 86;
+inline constexpr BlockId BLOCK_CHERRY_LEAVES = 87;
+inline constexpr BlockId BLOCK_JUNGLE_LOG = 88;
+inline constexpr BlockId BLOCK_JUNGLE_LEAVES = 89;
+inline constexpr BlockId BLOCK_COPPER_ORE = 90;
+inline constexpr BlockId BLOCK_REDSTONE_ORE = 91;
+inline constexpr BlockId BLOCK_LAPIS_ORE = 92;
 
-inline constexpr BlockId BLOCK_COUNT = 86;
+inline constexpr BlockId BLOCK_COUNT = 93;
 
 [[nodiscard]] inline constexpr bool is_lever(BlockId b) {
     return b == BLOCK_LEVER_OFF || b == BLOCK_LEVER_ON;
@@ -220,7 +227,16 @@ enum class Tile : uint16_t {
     AcaciaLogSide = 70,
     AcaciaLogTop = 71,
     AcaciaLeaves = 72,
-    Count = 73,
+    CherryLogSide = 73,
+    CherryLogTop = 74,
+    CherryLeaves = 75,
+    JungleLogSide = 76,
+    JungleLogTop = 77,
+    JungleLeaves = 78,
+    CopperOre = 79,
+    RedstoneOre = 80,
+    LapisOre = 81,
+    Count = 82,
 };
 
 // Stable tile names (texture overrides in assets/textures/<name>.png, debug
@@ -240,6 +256,9 @@ inline constexpr std::array<std::string_view, static_cast<size_t>(Tile::Count)> 
     "DestroyStage1", "DestroyStage2", "DestroyStage3", "DestroyStage4",
     "DestroyStage5", "DestroyStage6", "DestroyStage7", "DestroyStage8",
     "DestroyStage9", "AcaciaLogSide", "AcaciaLogTop", "AcaciaLeaves",
+    "CherryLogSide", "CherryLogTop", "CherryLeaves",
+    "JungleLogSide", "JungleLogTop", "JungleLeaves",
+    "CopperOre", "RedstoneOre", "LapisOre",
 };
 
 // Static properties of a block type. Looked up by id from a fixed table.
@@ -293,8 +312,6 @@ inline constexpr std::array<BlockProperties, BLOCK_COUNT> BLOCK_PROPERTIES_TABLE
     {"obsidian",     true,  true,  false, false, true,  0,  1, 0.6f,  Tile::Obsidian,        Tile::Obsidian,        Tile::Obsidian},
     {"spruce_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::LogTop,          Tile::LogTop,          Tile::LogSide},
     {"spruce_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::Leaves,          Tile::Leaves,          Tile::Leaves},
-    {"acacia_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::AcaciaLogTop,    Tile::AcaciaLogTop,    Tile::AcaciaLogSide},
-    {"acacia_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::AcaciaLeaves,    Tile::AcaciaLeaves,    Tile::AcaciaLeaves},
     {"birch_log",    true,  true,  false, false, true,  0,  1, 0.6f,  Tile::LogTop,          Tile::LogTop,          Tile::LogSide},
     {"birch_leaves", true,  false, true,  false, false, 0,  1, 0.6f,  Tile::Leaves,          Tile::Leaves,          Tile::Leaves},
     {"tall_grass",   false, false, true,  false, false, 0,  0, 0.6f,  Tile::TallGrass,       Tile::TallGrass,       Tile::TallGrass},
@@ -348,6 +365,17 @@ inline constexpr std::array<BlockProperties, BLOCK_COUNT> BLOCK_PROPERTIES_TABLE
     {"redstone_lamp_on", true, true,  false, false, true,  15, 1, 0.6f,  Tile::LampOn,          Tile::LampOn,          Tile::LampOn},
     {"repeater_off",   false, false, false, false, false, 0,  0, 0.6f,  Tile::Repeater,        Tile::Repeater,        Tile::Repeater},
     {"repeater_on",    false, false, false, false, false, 0,  0, 0.6f,  Tile::Repeater,        Tile::Repeater,        Tile::Repeater},
+    // Production ids 84+ (appended at the END — never reorder, saves store
+    // numeric ids).
+    {"acacia_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::AcaciaLogTop,    Tile::AcaciaLogTop,    Tile::AcaciaLogSide},
+    {"acacia_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::AcaciaLeaves,    Tile::AcaciaLeaves,    Tile::AcaciaLeaves},
+    {"cherry_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::CherryLogTop,    Tile::CherryLogTop,    Tile::CherryLogSide},
+    {"cherry_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::CherryLeaves,    Tile::CherryLeaves,    Tile::CherryLeaves},
+    {"jungle_log",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::JungleLogTop,    Tile::JungleLogTop,    Tile::JungleLogSide},
+    {"jungle_leaves",true,  false, true,  false, false, 0,  1, 0.6f,  Tile::JungleLeaves,    Tile::JungleLeaves,    Tile::JungleLeaves},
+    {"copper_ore",   true,  true,  false, false, true,  0,  1, 0.6f,  Tile::CopperOre,       Tile::CopperOre,       Tile::CopperOre},
+    {"redstone_ore", true,  true,  false, false, true,  0,  1, 0.6f,  Tile::RedstoneOre,     Tile::RedstoneOre,     Tile::RedstoneOre},
+    {"lapis_ore",    true,  true,  false, false, true,  0,  1, 0.6f,  Tile::LapisOre,        Tile::LapisOre,        Tile::LapisOre},
 }};
 // clang-format on
 

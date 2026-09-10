@@ -129,9 +129,12 @@ inline constexpr float UNBREAKABLE = -1.0f;
 // Minimum material tier required so the block yields its drop at all.
 [[nodiscard]] inline constexpr MaterialTier required_tier(BlockId b) {
     switch (b) {
-        case BLOCK_IRON_ORE: return MaterialTier::Stone;
+        case BLOCK_IRON_ORE:
+        case BLOCK_COPPER_ORE:
+        case BLOCK_LAPIS_ORE: return MaterialTier::Stone;
         case BLOCK_GOLD_ORE:
         case BLOCK_DIAMOND_ORE:
+        case BLOCK_REDSTONE_ORE:
         case BLOCK_OBSIDIAN: return MaterialTier::Iron;
         case BLOCK_STONE:
         case BLOCK_COBBLESTONE:
@@ -168,6 +171,8 @@ inline constexpr float UNBREAKABLE = -1.0f;
         case BLOCK_SPRUCE_LOG:
         case BLOCK_BIRCH_LOG:
         case BLOCK_ACACIA_LOG:
+        case BLOCK_CHERRY_LOG:
+        case BLOCK_JUNGLE_LOG:
         case BLOCK_CRAFTING_TABLE:
             return ToolClass::Axe;
         case BLOCK_FURNACE:
@@ -375,6 +380,9 @@ struct Drop {
         case BLOCK_SANDSTONE:
             return Drop{ITEM_COBBLESTONE, 1, 1};
         case BLOCK_COAL_ORE: return Drop{ITEM_COAL, 1, 1};
+        case BLOCK_COPPER_ORE: return Drop{ITEM_RAW_COPPER, 1, 2};
+        case BLOCK_REDSTONE_ORE: return Drop{ITEM_REDSTONE, 1, 3};
+        case BLOCK_LAPIS_ORE: return Drop{ITEM_LAPIS, 1, 2};
         case BLOCK_IRON_ORE: return Drop{BLOCK_IRON_ORE, 1, 1};  // smelt later
         case BLOCK_GOLD_ORE: return Drop{BLOCK_GOLD_ORE, 1, 1};
         case BLOCK_DIAMOND_ORE: return Drop{ITEM_DIAMOND, 1, 1};
@@ -382,7 +390,9 @@ struct Drop {
         case BLOCK_OAK_LEAVES: return Drop{ITEM_APPLE, 0, 1}; // chance-resolved below
         case BLOCK_SPRUCE_LEAVES:
         case BLOCK_BIRCH_LEAVES:
-        case BLOCK_ACACIA_LEAVES: return Drop{ITEM_STICK, 0, 1};
+        case BLOCK_ACACIA_LEAVES:
+        case BLOCK_CHERRY_LEAVES:
+        case BLOCK_JUNGLE_LEAVES: return Drop{ITEM_STICK, 0, 1};
         case BLOCK_GRAVEL: return Drop{BLOCK_GRAVEL, 1, 1};
         case BLOCK_SNOW: return Drop{BLOCK_SNOW, 1, 1};
         case BLOCK_CRAFTING_TABLE:
@@ -392,6 +402,8 @@ struct Drop {
         case BLOCK_SPRUCE_LOG:
         case BLOCK_BIRCH_LOG:
         case BLOCK_ACACIA_LOG:
+        case BLOCK_CHERRY_LOG:
+        case BLOCK_JUNGLE_LOG:
         case BLOCK_SAND:
         case BLOCK_DIRT:
         case BLOCK_CLAY:

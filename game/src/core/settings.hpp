@@ -25,6 +25,7 @@ struct Settings {
     bool vsync = true;
     bool fullscreen = false;
     int quality = 2;                // 0=low, 1=medium, 2=high (renderer preset)
+    float render_scale = 1.0f;      // world render scale (0.5..1.0, OptiFine-style)
 
     // Gameplay
     float mouse_sensitivity = 1.0f; // multiplier (0.2..3.0)
@@ -50,6 +51,7 @@ struct Settings {
         FILE* f = std::fopen(config_path().c_str(), "w");
         if (!f) return;
         std::fprintf(f, "render_distance=%d\n", render_distance);
+        std::fprintf(f, "render_scale=%.2f\n", render_scale);
         std::fprintf(f, "fov=%.1f\n", fov);
         std::fprintf(f, "shadows=%d\n", shadows ? 1 : 0);
         std::fprintf(f, "particles=%d\n", particles ? 1 : 0);
@@ -86,6 +88,7 @@ struct Settings {
             while (!val.empty() && (val.back() == '\n' || val.back() == '\r')) val.pop_back();
             if (key == "render_distance") s.render_distance = parse_int(val, s.render_distance);
             else if (key == "fov") s.fov = parse_float(val, s.fov);
+            else if (key == "render_scale") s.render_scale = parse_float(val, s.render_scale);
             else if (key == "shadows") s.shadows = parse_int(val, s.shadows ? 1 : 0) != 0;
             else if (key == "particles") s.particles = parse_int(val, s.particles ? 1 : 0) != 0;
             else if (key == "view_bobbing") s.view_bobbing = parse_int(val, s.view_bobbing ? 1 : 0) != 0;
@@ -103,6 +106,7 @@ struct Settings {
         s.render_distance = std::clamp(s.render_distance, 2, 10);
         s.quality = std::clamp(s.quality, 0, 2);
         s.fov = std::clamp(s.fov, 60.0f, 110.0f);
+        s.render_scale = std::clamp(s.render_scale, 0.5f, 1.0f);
         s.mouse_sensitivity = std::clamp(s.mouse_sensitivity, 0.2f, 3.0f);
         s.volume_master = std::clamp(s.volume_master, 0.0f, 1.0f);
         s.volume_blocks = std::clamp(s.volume_blocks, 0.0f, 1.0f);

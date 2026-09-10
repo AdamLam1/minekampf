@@ -50,8 +50,10 @@ inline constexpr float WALK_SPEED = 0.1f;
 // Random tick gamerule default (PHASE5 §1.3)
 inline constexpr int RANDOM_TICK_SPEED = 1;
 
-// World boundary — fixed 16x16 chunk world centered at (0,0).
-inline constexpr int WORLD_CHUNK_HALF = 8;
+// World boundary — fixed 32x32 chunk world (512x512 blocks) centered at (0,0).
+// Large enough for every biome to appear several times, small enough that the
+// full initial generation still fits the loading screen (~1000 chunks).
+inline constexpr int WORLD_CHUNK_HALF = 16;
 inline constexpr int WORLD_CHUNK_MIN = -WORLD_CHUNK_HALF;
 inline constexpr int WORLD_CHUNK_MAX = WORLD_CHUNK_HALF - 1;
 

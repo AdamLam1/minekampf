@@ -470,6 +470,12 @@ void ItemIcons::generate(const TextureAtlas& atlas) {
     with_mat(ITEM_DIAMOND, kDiamond, art_diamond);
     with_mat(ITEM_STICK, kWood, art_stick);
     with_mat(ITEM_COAL, kCoal, [](Art& a) { art_lump(a); }, 120, 120, 130);
+    with_mat(ITEM_RAW_COPPER, {205, 110, 60, 150, 75, 40, 245, 170, 120},
+             [](Art& a) { art_lump(a); }, 150, 120, 130);
+    with_mat(ITEM_REDSTONE, {190, 30, 30, 130, 15, 15, 255, 90, 80},
+             [](Art& a) { art_lump(a); }, 130, 110, 120);
+    with_mat(ITEM_LAPIS, {40, 70, 190, 25, 45, 130, 100, 140, 240},
+             [](Art& a) { art_lump(a); }, 120, 130, 160);
     with_mat(ITEM_CHARCOAL, kCharcoal, [](Art& a) { art_lump_impl(a, true); }, 140, 118, 96);
     with_mat(ITEM_APPLE, kApple, art_apple, 90, 160, 60);
     with_mat(ITEM_RAW_MEAT, kRawMeat, [](Art& a) { art_meat(a); }, 246, 240, 228);

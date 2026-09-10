@@ -2,38 +2,156 @@
   "quests": [
     {
       "id": 2,
-      "title": "Zelazna przysluga",
-      "description": "Przynies 5 rud zelaza.\nNagroda: 25 XP i 2 jablka.",
+      "title": "Żelazna przysługa",
+      "description": "Przynieś 5 rud żelaza.\nNagroda: 25 XP i 2 jabłka.",
       "type": "collect",
       "item": "iron_ore",
       "count": 5,
       "xp": 25,
       "rewards": [
-        {"item": "apple", "count": 2}
+        {
+          "item": "apple",
+          "count": 2
+        }
       ]
     },
     {
       "id": 3,
-      "title": "Lowca szkieletow",
-      "description": "Zabij 3 szkielety.\nNagroda: 40 XP i 12 strzal.",
+      "title": "Łowca szkieletów",
+      "description": "Zabij 3 szkielety.\nNagroda: 40 XP i 12 strzał.",
       "type": "kill",
       "mob": "skeleton",
       "count": 3,
       "xp": 40,
       "rewards": [
-        {"item": "arrow", "count": 12}
+        {
+          "item": "arrow",
+          "count": 12
+        }
       ]
     },
     {
       "id": 4,
       "title": "Wiejski dostawca",
-      "description": "Przynies 8 debkowych desek.\nNagroda: 10 XP i 1 wegiel.",
+      "description": "Przynieś 8 dębowych desek.\nNagroda: 10 XP i 1 węgiel.",
       "type": "collect",
       "item": "oak_planks",
       "count": 8,
       "xp": 10,
       "rewards": [
-        {"item": "coal", "count": 1}
+        {
+          "item": "coal",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Kamienny fundament",
+      "description": "Wieś potrzebuje budulec.\nPrzynieś 16 bruku.\nNagroda: 15 XP i 4 pochodnie.",
+      "type": "collect",
+      "item": "cobblestone",
+      "count": 16,
+      "xp": 15,
+      "rewards": [
+        {
+          "item": "torch",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Pasterz nocy",
+      "description": "Zombie grasują po zmroku.\nZabij 4 sztuki.\nNagroda: 45 XP i 3 sztabki żelaza.",
+      "type": "kill",
+      "mob": "zombie",
+      "count": 4,
+      "xp": 45,
+      "rewards": [
+        {
+          "item": "iron_ingot",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Mięsny biznes",
+      "description": "Karczma zamawia mięso.\nPrzynieś 5 surowego mięsa.\nNagroda: 20 XP, pieczeń i jabłka.",
+      "type": "collect",
+      "item": "raw_meat",
+      "count": 5,
+      "xp": 20,
+      "rewards": [
+        {
+          "item": "cooked_meat",
+          "count": 3
+        },
+        {
+          "item": "apple",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Ogień w ciemności",
+      "description": "Kopalnia czeka.\nPrzynieś 8 węgla.\nNagroda: 25 XP i 12 pochodni.",
+      "type": "collect",
+      "item": "coal",
+      "count": 8,
+      "xp": 25,
+      "rewards": [
+        {
+          "item": "torch",
+          "count": 12
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Diamentowy cel",
+      "description": "Najrzadszy skarb głębin.\nPrzynieś 3 diamenty.\nNagroda: 60 XP i diamentowy miecz.",
+      "type": "collect",
+      "item": "diamond",
+      "count": 3,
+      "xp": 60,
+      "rewards": [
+        {
+          "item": "diamond_sword",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Wojownik",
+      "description": "Dowód męstwa: 6 pokonanych\nzombie jedną noc. Nagroda:\n70 XP i żelazny miecz.",
+      "type": "kill",
+      "mob": "zombie",
+      "count": 6,
+      "xp": 70,
+      "rewards": [
+        {
+          "item": "iron_sword",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Strażnik wsi",
+      "description": "Szkielety straszą kupców.\nZabij 8 sztuk.\nNagroda: 90 XP i 3 sztabki złota.",
+      "type": "kill",
+      "mob": "skeleton",
+      "count": 8,
+      "xp": 90,
+      "rewards": [
+        {
+          "item": "gold_ingot",
+          "count": 3
+        }
       ]
     }
   ]

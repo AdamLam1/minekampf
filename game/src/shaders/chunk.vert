@@ -1,10 +1,12 @@
 #version 460 core
 // Upgraded Chunk vertex shader with multi-frequency wind harmonics for stylized foliage.
 
-layout(location = 0) in vec3 a_pos;
-layout(location = 1) in vec3 a_uv;
-layout(location = 2) in uvec4 a_light; // (block_light, sky_light, ao, face) as bytes
-layout(location = 3) in vec4 a_color; // (r,g,b,a) normalized 0..1
+// Compact 24-byte packed vertex (see chunk_mesh.hpp PackedVertex).
+layout(location = 0) in ivec4 a_pos_i;      // world x, y, z (int16, whole blocks)
+layout(location = 1) in uint a_packed_uv;   // u(16) v(16), uv/16*65535
+layout(location = 2) in uvec4 a_meta;       // tile, block_light, sky_light, ao
+layout(location = 3) in uvec4 a_meta2;      // face, r, g, b
+layout(location = 4) in uint a_packed_alpha;
 
 uniform mat4 u_view_proj;
 uniform mat4 u_light_space_matrix;
@@ -25,6 +27,15 @@ out vec4 v_frag_pos_light_space;
 out vec4 v_clip; // screen-space anchor for SSR ray marching
 
 void main() {
+    // Unpack the compact vertex (names kept identical to the old attribs).
+    const vec3 a_pos = vec3(a_pos_i.x, a_pos_i.y, a_pos_i.z);
+    const vec3 a_uv = vec3(float(a_packed_uv & 0xFFFFu) * (16.0 / 65535.0),
+                           float((a_packed_uv >> 16u) & 0xFFFFu) * (16.0 / 65535.0),
+                           float(a_meta.x));
+    const uvec4 a_light = uvec4(a_meta.y, a_meta.z, a_meta.w, a_meta2.x);
+    const vec4 a_color = vec4(float(a_meta2.y), float(a_meta2.z), float(a_meta2.w),
+                              float(a_packed_alpha)) / 255.0;
+
     v_uv = a_uv;
     v_color = a_color.rgb;
     v_alpha = a_color.a;
@@ -32,14 +43,15 @@ void main() {
     
     uint face = a_light.w;
     uint face_dir = face;
-    if (face >= 30u) { v_mat_type = 3.0; face_dir -= 30u; }
+    if (face >= 40u) { v_mat_type = 4.0; face_dir -= 40u; } // static cross (torch...)
+    else if (face >= 30u) { v_mat_type = 3.0; face_dir -= 30u; }
     else if (face >= 20u) { v_mat_type = 2.0; face_dir -= 20u; }
     else if (face >= 10u) { v_mat_type = 1.0; face_dir -= 10u; }
     else { v_mat_type = 0.0; }
     
     vec3 pos = a_pos;
     
-    if (v_mat_type == 3.0) { // Foliage / Grass
+    if (v_mat_type == 3.0) { // Foliage / Grass only — torches (mat 4) stay still
         float wind1 = sin(u_time * 2.5 + pos.x * 0.8 + pos.z * 0.8) * 0.08;
         float wind2 = cos(u_time * 3.7 + pos.x * 1.5 - pos.z * 1.2) * 0.04;
         float sway = (wind1 + wind2) * (1.0 - a_uv.y);

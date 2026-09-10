@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <map>
 #include <string>
 #include <tuple>
@@ -12,6 +13,7 @@
 #include "core/thread_pool.hpp"
 #include "core/automation_server.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_events.hpp"
 #include "gameplay/player.hpp"
 #include "gameplay/crafting.hpp"
 #include "gameplay/mining.hpp"
@@ -157,6 +159,15 @@ private:
     bool settings_open_ = false;
     int settings_tab_ = 0; // 0=Grafika 1=Gra 2=Dźwięki
     std::unique_ptr<AudioEngine> audio_;
+    SoundEvents sfx_;
+    float last_step_dist_ = 0.0f;
+    bool prev_on_ground_ = false;
+    float fps_ema_ = 0.0f;      // smoothed frames-per-second (perf tooling)
+    float frame_ms_ema_ = 0.0f; // smoothed frame time in ms
+    float frame_ms_max_ = 0.0f; // worst frame in the last ~1 s (jitter metric)
+    int frame_count_ = 0;
+    std::chrono::steady_clock::time_point last_frame_start_ =
+        std::chrono::steady_clock::now();
 
     // Menu backdrop: a small in-memory world rendered as a rotating panorama.
     void prepare_menu_world();

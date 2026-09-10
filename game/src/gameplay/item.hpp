@@ -38,7 +38,10 @@ inline constexpr ItemId ITEM_CHARCOAL = 272;
 inline constexpr ItemId ITEM_BOW = 273;
 inline constexpr ItemId ITEM_ARROW = 274;
 inline constexpr ItemId ITEM_BOOK = 275;
-inline constexpr ItemId ITEM_COUNT = 276;
+inline constexpr ItemId ITEM_RAW_COPPER = 276;
+inline constexpr ItemId ITEM_REDSTONE = 277;
+inline constexpr ItemId ITEM_LAPIS = 278;
+inline constexpr ItemId ITEM_COUNT = 279;
 
 struct ItemProperties {
     std::string_view name;

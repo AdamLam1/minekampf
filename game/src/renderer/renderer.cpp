@@ -42,7 +42,9 @@ bool Renderer::init(int width, int height, std::string_view title) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+    // Debug context disabled: AMD's driver runs a drastically slower
+    // path for GL debug contexts (whole-frame stalls measured ~30 ms).
+    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     window_ = glfwCreateWindow(width, height, std::string(title).c_str(), nullptr, nullptr);
@@ -85,6 +87,7 @@ bool Renderer::init(int width, int height, std::string_view title) {
     glfwSwapInterval(1); // VSync
 
     int version = gladLoadGL(glfwGetProcAddress);
+    gpu_name_ = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     if (version == 0) {
         MC_LOG_ERROR("Failed to load OpenGL functions");
         glfwDestroyWindow(window_);
@@ -94,7 +97,9 @@ bool Renderer::init(int width, int height, std::string_view title) {
     }
     MC_LOG_INFO("OpenGL {}.{} loaded", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
-    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    // Async delivery: the SYNCHRONOUS flag forces a driver<->callback sync
+    // per GL message, which is measurable in draw-heavy frames.
+    glEnable(GL_DEBUG_OUTPUT);
     glDebugMessageCallback(gl_debug_callback, nullptr);
 
     glEnable(GL_DEPTH_TEST);
@@ -235,9 +240,34 @@ void Renderer::begin_frame(const Camera& camera) {
     view_proj_ = camera.view_projection();
     inv_view_proj_ = glm::inverse(view_proj_);
 
-    // ---- SHADOW PASS ----
-    if (shadows_enabled_) {
-        glm::mat4 light_proj = glm::ortho(-64.0f, 64.0f, -64.0f, 64.0f, 1.0f, 300.0f);
+    // ---- SHADOW PASS (incremental, frame-budgeted) ----
+    // The depth map is a persistent target: each frame redraws at most
+    // shadow_draw_budget_ chunk slices out of the candidate queue, so the
+    // driver per-draw cost never concentrates into one frame spike. The map
+    // restarts (clear + fresh queue) only when the quantized sun angle or
+    // the camera anchor chunk moves materially.
+    const bool shadow_timed = shadows_enabled_;
+    last_shadow_chunks_ = 0;
+
+    const float sun_quant = std::floor(sun_angle_ / 0.05f); // ~2.9 deg steps
+    const glm::vec3 anchor(std::floor(camera.position.x / 32.0f),
+                           std::floor(camera.position.y / 32.0f),
+                           std::floor(camera.position.z / 32.0f));
+    const bool projection_moved = sun_quant != last_shadow_sun_angle_ ||
+                                  anchor != last_shadow_anchor_;
+    if (shadow_timed && projection_moved) {
+        last_shadow_sun_angle_ = sun_quant;
+        last_shadow_anchor_ = anchor;
+        shadow_queue_.clear();
+        shadow_cycle_active_ = true;
+    }
+    const bool shadow_draw_frame = shadows_enabled_ &&
+                                   (shadow_cycle_active_ || !shadow_queue_.empty());
+    if (shadow_timed && shadow_draw_frame) gpu_begin(GpuSection::Shadow);
+    if (shadows_enabled_ && shadow_draw_frame) {
+        glm::mat4 light_proj = glm::ortho(-shadow_extent_, shadow_extent_,
+                                          -shadow_extent_, shadow_extent_,
+                                          1.0f, 300.0f);
         glm::vec3 light_center = camera.position + camera.forward() * 24.0f;
         glm::vec3 light_pos = light_center + sun_dir_ * 128.0f;
         glm::mat4 light_view = glm::lookAt(light_pos, light_center, glm::vec3(0.0f, 1.0f, 0.0f));
@@ -245,19 +275,59 @@ void Renderer::begin_frame(const Camera& camera) {
 
         glViewport(0, 0, shadow_map_size_, shadow_map_size_);
         glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_);
-        glClear(GL_DEPTH_BUFFER_BIT);
+        if (shadow_cycle_active_) {
+            glClear(GL_DEPTH_BUFFER_BIT);
+            shadow_cycle_active_ = false;
+            // (Re)build the candidate list for this projection: chunks whose
+            // AABB survives the light-space clip. The AABB is padded by 32
+            // blocks so small anchor movements stay covered by the persistent
+            // map instead of forcing a full cycle restart (smoothness).
+            shadow_queue_.clear();
+            for (const auto& [pos, mesh] : meshes_) {
+                if (mesh.opaque.index_count == 0) continue;
+                glm::vec3 lo(1e9f), hi(-1e9f);
+                for (int cx2 = 0; cx2 < 2; ++cx2) {
+                    for (int cy2 = 0; cy2 < 2; ++cy2) {
+                        for (int cz2 = 0; cz2 < 2; ++cz2) {
+                            const float px = static_cast<float>(pos.x * 16 + cx2 * 16);
+                            const float pz = static_cast<float>(pos.z * 16 + cz2 * 16);
+                            const float py = static_cast<float>(cy2 ? MAX_Y : MIN_Y);
+                            const glm::vec4 corner(
+                                px + (px < light_center.x ? -32.0f : 32.0f),
+                                py,
+                                pz + (pz < light_center.z ? -32.0f : 32.0f),
+                                1.0f);
+                            const glm::vec4 ls = light_space_matrix_ * corner;
+                            const glm::vec3 ndc = glm::vec3(ls) / ls.w;
+                            lo = glm::min(lo, ndc);
+                            hi = glm::max(hi, ndc);
+                        }
+                    }
+                }
+                if (hi.x < -1.0f || lo.x > 1.0f ||
+                    hi.y < -1.0f || lo.y > 1.0f ||
+                    hi.z < -1.0f || lo.z > 1.0f) {
+                    continue;
+                }
+                shadow_queue_.push_back(pos);
+            }
+        }
         shadow_shader_.use();
         shadow_shader_.set_mat4("u_light_space_matrix", glm::value_ptr(light_space_matrix_));
 
         glEnable(GL_CULL_FACE);
         glCullFace(GL_FRONT); // Fix peter panning
-        for (const auto& [pos, mesh] : meshes_) {
-            float dist = glm::distance(glm::vec2(camera.position.x, camera.position.z), glm::vec2(pos.x * 16.0f, pos.z * 16.0f));
-            if (dist < shadow_radius_) { // Render chunks within radius to shadow map
-                mesh.opaque.draw();
-            }
+        int budget = shadow_draw_budget_;
+        while (budget > 0 && !shadow_queue_.empty()) {
+            const ChunkPos pos = shadow_queue_.back();
+            shadow_queue_.pop_back();
+            const auto it = meshes_.find(pos);
+            if (it == meshes_.end()) continue;
+            it->second.opaque.draw();
+            ++last_shadow_chunks_;
+            --budget;
         }
-        // Mobs cast shadows on the terrain too.
+        // Mobs cast shadows on the terrain too (cheap: few casters).
         if (shadow_casters_ != nullptr) {
             mob_renderer_.draw_depth(light_space_matrix_, *shadow_casters_,
                                      shadow_casters_time_);
@@ -265,18 +335,24 @@ void Renderer::begin_frame(const Camera& camera) {
         glCullFace(GL_BACK);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
+    if (shadow_timed && shadow_draw_frame) gpu_end(GpuSection::Shadow);
 
     // ---- MAIN PASS ----
     glfwGetFramebufferSize(window_, &width_, &height_);
-    static int last_w = 0, last_h = 0;
-    if (width_ != last_w || height_ != last_h) {
-        resize_fbos(width_, height_);
-        last_w = width_;
-        last_h = height_;
+    // World FBOs render at render_scale_ * window size; the post pass
+    // upscales to the full window (UI is drawn after post, always native).
+    fbo_w_ = std::max(1, static_cast<int>(std::lround(static_cast<float>(width_) * render_scale_)));
+    fbo_h_ = std::max(1, static_cast<int>(std::lround(static_cast<float>(height_) * render_scale_)));
+    static int last_fw = 0, last_fh = 0;
+    if (fbo_w_ != last_fw || fbo_h_ != last_fh || fbo_dims_dirty_) {
+        resize_fbos(fbo_w_, fbo_h_);
+        last_fw = fbo_w_;
+        last_fh = fbo_h_;
+        fbo_dims_dirty_ = false;
     }
     
     glBindFramebuffer(GL_FRAMEBUFFER, main_fbo_);
-    glViewport(0, 0, width_, height_);
+    glViewport(0, 0, fbo_w_, fbo_h_);
     glClearColor(0.62f, 0.80f, 0.96f, 1.0f); // sky blue
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -306,8 +382,10 @@ void Renderer::begin_frame(const Camera& camera) {
     // Same sky/fog colors the skybox uses — the water Fresnel path must
     // reflect the actual sky, not a hardcoded tint. Day zenith is a deeper
     // saturated blue than the pale horizon so terrain silhouettes pop.
-    glm::vec3 chunk_sky = glm::vec3(0.36f, 0.56f, 0.94f) * sky_brightness_;
-    glm::vec3 chunk_fog = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
+    // Storms gray both out toward flat overcast blue.
+    const glm::vec3 rain_gray(0.45f, 0.50f, 0.58f);
+    glm::vec3 chunk_sky = glm::mix(glm::vec3(0.36f, 0.56f, 0.94f), rain_gray, weather_darkness_) * sky_brightness_;
+    glm::vec3 chunk_fog = glm::mix(glm::vec3(0.60f, 0.77f, 0.95f), rain_gray * 1.12f, weather_darkness_) * sky_brightness_;
     shader_.set_vec3("u_sky_color", chunk_sky.x, chunk_sky.y, chunk_sky.z);
     shader_.set_vec3("u_fog_color", chunk_fog.x, chunk_fog.y, chunk_fog.z);
     shader_.set_float("u_fog_start", 110.0f);
@@ -324,6 +402,7 @@ void Renderer::begin_frame(const Camera& camera) {
 }
 
 void Renderer::end_frame() { 
+    gpu_begin(GpuSection::Post);
     // ---- POST PROCESSING PASS ----
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, width_, height_);
@@ -333,7 +412,8 @@ void Renderer::end_frame() {
     post_shader_.set_vec3("u_sun_dir", sun_dir_.x, sun_dir_.y, sun_dir_.z);
     // Same horizon color the sky shader uses — distant water fogs toward it,
     // so any mismatch seams the ocean against the sky.
-    glm::vec3 post_fog = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
+    glm::vec3 post_fog = glm::mix(glm::vec3(0.60f, 0.77f, 0.95f),
+                                  glm::vec3(0.45f, 0.50f, 0.58f) * 1.12f, weather_darkness_) * sky_brightness_;
     post_shader_.set_vec3("u_fog_color", post_fog.x, post_fog.y, post_fog.z);
     post_shader_.set_mat4("u_view_proj", glm::value_ptr(view_proj_));
     post_shader_.set_mat4("u_inv_view_proj", glm::value_ptr(inv_view_proj_));
@@ -343,7 +423,7 @@ void Renderer::end_frame() {
     post_shader_.set_mat4("u_inv_view", glm::value_ptr(inv_view_));
     post_shader_.set_vec3("u_camera_pos", camera_pos_.x, camera_pos_.y, camera_pos_.z);
     post_shader_.set_mat4("u_light_space_matrix", glm::value_ptr(light_space_matrix_));
-    post_shader_.set_vec2("u_resolution", static_cast<float>(width_), static_cast<float>(height_));
+    post_shader_.set_vec2("u_resolution", static_cast<float>(fbo_w_), static_cast<float>(fbo_h_));
     post_shader_.set_float("u_time", static_cast<float>(glfwGetTime()));
     post_shader_.set_float("u_is_underwater", underwater_ ? 1.0f : 0.0f);
     post_shader_.set_float("u_shadows_on", shadows_enabled_ ? 1.0f : 0.0f);
@@ -372,6 +452,43 @@ void Renderer::end_frame() {
     glBindVertexArray(quad_vao_);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+    gpu_end(GpuSection::Post);
+}
+
+uint64_t Renderer::total_mesh_indices() const {
+    uint64_t n = 0;
+    for (const auto& [pos, mesh] : meshes_) {
+        n += static_cast<uint64_t>(mesh.opaque.index_count) +
+             static_cast<uint64_t>(mesh.transparent.index_count);
+    }
+    return n;
+}
+
+void Renderer::gpu_begin(GpuSection s) {
+    auto& slot = gpu_slots_[static_cast<size_t>(s)];
+    auto& q = slot.q[slot.head % 4];
+    if (q == 0) glGenQueries(1, &q);
+    glBeginQuery(GL_TIME_ELAPSED, q);
+}
+
+void Renderer::gpu_end(GpuSection s) {
+    auto& slot = gpu_slots_[static_cast<size_t>(s)];
+    slot.head = (slot.head + 1) % 4;
+    glEndQuery(GL_TIME_ELAPSED);
+    // Poll the ring (minus the one just submitted): results of throttled
+    // passes land a few frames late, so collect whichever are ready.
+    for (int k = 0; k < 4; ++k) {
+        if (k == (slot.head + 3) % 4) continue; // just-submitted
+        const unsigned int qk = slot.q[k];
+        if (qk == 0) continue;
+        GLint avail = 0;
+        glGetQueryObjectiv(qk, GL_QUERY_RESULT_AVAILABLE, &avail);
+        if (!avail) continue;
+        GLuint64 ns = 0;
+        glGetQueryObjectui64v(qk, GL_QUERY_RESULT, &ns);
+        if (ns > 0) slot.last_ms = static_cast<float>(static_cast<double>(ns) / 1e6);
+    }
+    gpu_ms_[static_cast<size_t>(s)] = slot.last_ms;
 }
 
 void Renderer::present() {
@@ -406,7 +523,13 @@ bool Renderer::has_mesh(ChunkPos pos) const { return meshes_.contains(pos); }
 
 void Renderer::render_opaque(const Camera& camera) {
     ZoneScoped;
-    draw_sky(camera);
+    gpu_begin(GpuSection::Opaque);
+    {
+        ProfileScope sky_scope(ProfileSection::RenderSky);
+        gpu_begin(GpuSection::Sky);
+        draw_sky(camera);
+        gpu_end(GpuSection::Sky);
+    }
     draw_pass(camera, false); // opaque, front-to-back
     draw_mining_overlay(camera);
 
@@ -415,6 +538,7 @@ void Renderer::render_opaque(const Camera& camera) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, opaque_fbo_);
     glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, main_fbo_); // Bind back to main FBO for transparent pass
+    gpu_end(GpuSection::Opaque);
 }
 
 // Destroy-stage cracks on the block being mined, drawn slightly inflated so
@@ -470,6 +594,7 @@ void Renderer::draw_mining_overlay(const Camera& camera) {
 }
 
 void Renderer::render_transparent(const Camera& camera) {
+    gpu_begin(GpuSection::Transparent);
     ZoneScoped;
     shader_.use();
     
@@ -481,11 +606,11 @@ void Renderer::render_transparent(const Camera& camera) {
     glBindTexture(GL_TEXTURE_2D, opaque_depth_tex_);
     shader_.set_int("u_opaque_depth", 6);
     
-    shader_.set_vec2("u_resolution", static_cast<float>(width_), static_cast<float>(height_));
+    shader_.set_vec2("u_resolution", static_cast<float>(fbo_w_), static_cast<float>(fbo_h_));
 
     draw_pass(camera, true);  // transparent, back-to-front
     draw_hand();
-    draw_crosshair();
+    draw_crosshair();    gpu_end(GpuSection::Transparent);
 }
 
 void Renderer::draw_pass(const Camera& camera, bool transparent) {
@@ -498,6 +623,7 @@ void Renderer::draw_pass(const Camera& camera, bool transparent) {
     }
 
     auto& visible = visible_cache_;
+    ProfileScope cull_scope(ProfileSection::FrustumCulling);
     visible.clear();
     visible.reserve(meshes_.size());
     for (const auto& [pos, mesh] : meshes_) {
@@ -689,7 +815,7 @@ void Renderer::set_quality(QualityPreset q) {
             break;
         case QualityPreset::Medium:
             map_size = 2048;
-            shadow_radius_ = 96.0f;
+            shadow_radius_ = 80.0f;
             clouds_ = 1.0f;
             pom_dist_ = 12.0f;
             ssr_ = 1.0f;
@@ -697,7 +823,7 @@ void Renderer::set_quality(QualityPreset q) {
             break;
         default:
             map_size = 4096;
-            shadow_radius_ = 128.0f;
+            shadow_radius_ = 64.0f;
             clouds_ = 1.0f;
             pom_dist_ = 20.0f;
             ssr_ = 1.0f;
@@ -961,13 +1087,16 @@ void Renderer::draw_sky(const Camera& camera) {
     
     // Sky color matches day/night, fog matches horizon
     // Deep day zenith, paler horizon (see main-pass comment on chunk_sky).
-    glm::vec3 sky_color = glm::vec3(0.36f, 0.56f, 0.94f) * sky_brightness_;
-    glm::vec3 fog_color = glm::vec3(0.60f, 0.77f, 0.95f) * sky_brightness_;
+    // Storm gray-out mirrors the main pass (see rain_gray there).
+    glm::vec3 sky_color = glm::mix(glm::vec3(0.36f, 0.56f, 0.94f),
+                                   glm::vec3(0.45f, 0.50f, 0.58f), weather_darkness_) * sky_brightness_;
+    glm::vec3 fog_color = glm::mix(glm::vec3(0.60f, 0.77f, 0.95f),
+                                   glm::vec3(0.45f, 0.50f, 0.58f) * 1.12f, weather_darkness_) * sky_brightness_;
     
     sky_shader_.set_vec3("u_sky_color", sky_color.x, sky_color.y, sky_color.z);
     sky_shader_.set_vec3("u_fog_color", fog_color.x, fog_color.y, fog_color.z);
     sky_shader_.set_vec3("u_sun_dir", sun_dir_.x, sun_dir_.y, sun_dir_.z);
-    sky_shader_.set_vec2("u_resolution", static_cast<float>(width_), static_cast<float>(height_));
+    sky_shader_.set_vec2("u_resolution", static_cast<float>(fbo_w_), static_cast<float>(fbo_h_));
     sky_shader_.set_float("u_time", static_cast<float>(glfwGetTime()));
     sky_shader_.set_float("u_clouds", clouds_);
     sky_shader_.set_vec3("u_sun_dir", sun_dir_.x, sun_dir_.y, sun_dir_.z);
