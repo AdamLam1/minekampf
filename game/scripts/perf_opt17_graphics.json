@@ -1,0 +1,20 @@
+{
+  "date": "2026-09-07",
+  "scenario": "steady + orbit, quality high, RX 6600 @1280x720, DisplayLink display",
+  "session2_changes": [
+    "render scale (OptiFine-style): world FBOs at 50-100% of window, post upscales, UI native; setting render_scale + /render_scale command",
+    "compact vertex format 32->24 bytes (PackedVertex: world pos as 3x int16 lossless, uv quantized u16 1/4096 block-face, metadata bytes) \u2014 chunk.vert unpacks; -25% vertex bandwidth/VRAM",
+    "cloud shadows: drifting 2D fbm darkens direct sun on terrain (matches sky cumulus drift), ambient untouched",
+    "gotobiome: dry-land filter (no more teleporting into lakes); graphics_test: deterministic leaf rig (oak+cherry) instead of seed-dependent forest goto",
+    "F3 overlay: fixed double-toggle bug (overlay often never appeared) + real frame pacing line (frame ms, max, tick ms)"
+  ],
+  "gates": {
+    "unit": "210/210",
+    "auto_test": "84/84",
+    "visual": "7/7",
+    "shader": "6/6",
+    "graphics": "5/5",
+    "perf": "OK"
+  },
+  "fps_note": "steady 31-32 fps on DisplayLink (external ~30fps cap); vertex bandwidth -25% and fragment scaling benefit directly visible on non-DisplayLink displays"
+}

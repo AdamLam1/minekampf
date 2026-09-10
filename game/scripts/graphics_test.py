@@ -108,22 +108,21 @@ def main():
         api.exec("/time 0.5")
 
         # ---- T1: torch upright — rig built LOCAL to the camera over OPEN
-        # OCEAN (30 blocks seaward of the /goto point: no trees, no shore in
-        # the 3-block corridor). Camera floats 1 block above, looking slightly
-        # down; background is open water and sky. ----------------------------
+        # WATER, high above any terrain (new biomes grow 12+ block trees that
+        # used to occlude the rig at its old low height; seed-dependent).
+        # Camera aims at the rig by computed pitch (yaw 0 faces +Z here).
         api.exec("/goto water")
         st = api.state(); x, y, z = [int(v) for v in st["pos"]]
         ox, oz = x - 30, z
-        api.exec(f"/tp {ox} {y+10} {oz}")
+        api.exec(f"/tp {ox} {y+40} {oz}")
         time.sleep(1.5)                          # let the chunk load
-        # Rig hangs 12 blocks AHEAD of the camera. NOTE: at yaw 0 the camera
-        # faces +Z (verified empirically via compass pillars; math.hpp's
-        # comment says -Z but the rendered view disagrees). The +Z corridor
-        # from the goto-water point is open water — nothing occludes.
-        api.exec(f"/setblock {ox} {y+16} {oz+12} stone")
-        api.exec(f"/setblock {ox} {y+17} {oz+12} torch")
-        api._rpc({"cmd": "look", "yaw": 0, "pitch": -21})
-        time.sleep(3.0)
+        api.exec(f"/setblock {ox} {y+46} {oz+12} stone")
+        api.exec(f"/setblock {ox} {y+47} {oz+12} torch")
+        import math as _m
+        _dy = (y + 47.5) - (y + 40 + 1.6)   # rig center - camera eye
+        _pitch = -round(_m.degrees(_m.atan2(_dy, 12.5)))
+        api._rpc({"cmd": "look", "yaw": 0, "pitch": _pitch})
+        time.sleep(7.0)   # mesh+upload queue drains at 3 uploads/frame now
         shots["torch"] = capture(api, out, "t1_torch")
 
         # ---- T2: beach crispness (no POM smear) --------------------------
@@ -142,12 +141,24 @@ def main():
         time.sleep(1.5)
         shots["beach"] = capture(api, out, "t2_beach")
 
-        # ---- T3: forest edge (leaves solid, grass upright) ---------------
-        api.exec("/goto grass_block")
-        st = api.state(); x, y, z = st["pos"]
-        api.exec(f"/tp {x} {y+3} {z}")
-        api._rpc({"cmd": "look", "yaw": 0, "pitch": 12})
-        time.sleep(1.2)
+        # ---- T3: leaf render rig — deterministic (builds oak + cherry leaf
+        # blocks over open water; random forests got seed-dependent dark
+        # canopies that made the pixel count unreliable). Both leaf types are
+        # a canary for vertex-color/tint packing correctness.
+        api.exec("/goto water")
+        st = api.state(); x, y, z = [int(v) for v in st["pos"]]
+        ox, oz = x - 30, z
+        api.exec(f"/tp {ox} {y+14} {oz}")
+        time.sleep(1.5)
+        api.exec(f"/setblock {ox} {y+10} {oz+8} grass_block")
+        api.exec(f"/setblock {ox} {y+11} {oz+8} oak_leaves")
+        api.exec(f"/setblock {ox+2} {y+11} {oz+8} cherry_leaves")
+        api.exec(f"/setblock {ox-2} {y+12} {oz+8} cherry_leaves")
+        import math as _m
+        _dy = (y + 11.5) - (y + 14 + 1.6)
+        _pitch = -round(_m.degrees(_m.atan2(_dy, 8.0)))
+        api._rpc({"cmd": "look", "yaw": 0, "pitch": _pitch})
+        time.sleep(7.0)
         shots["forest"] = capture(api, out, "t3_forest")
 
         # ---- T4: water body present over ocean ---------------------------
@@ -194,13 +205,15 @@ def main():
     forest = shots.get("forest")
     if forest is not None:
         w, h = forest.size
+        # Sunlit green foliage OR cherry-pink canopy (both are leaf renders;
+        # pink is a good canary for vertex-color packing correctness).
         greens = 0
-        for yy in range(h // 3, h, 4):
+        for yy in range(0, h, 4):
             for xx in range(0, w, 4):
                 r, g, b = forest.getpixel((xx, yy))[:3]
-                if g > 90 and g > r + 20 and g > b + 20:
+                if (g > 90 and g > r + 20 and g > b + 20) or                    (r > 200 and g < r - 40 and b > 130):
                     greens += 1
-        results.append(("forest_grass_present", greens > 400, f"{greens} green px"))
+        results.append(("forest_grass_present", greens > 400, f"{greens} leaf px"))
 
     ocean = shots.get("ocean")
     if ocean is not None:

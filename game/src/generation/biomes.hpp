@@ -20,6 +20,10 @@ enum class Biome : uint8_t {
     Taiga,
     Snowy,
     Mountains,
+    Swamp,
+    Jungle,
+    CherryGrove,
+    FlowerForest,
     Count,
 };
 

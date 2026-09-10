@@ -17,6 +17,11 @@ public:
     WeatherState current_state() const { return state_; }
     float intensity() const { return intensity_; }
     float sky_darkening() const { return intensity_ * 0.5f; }
+    // Debug/commands: jump straight to a state (intensity keeps smoothing).
+    void force(WeatherState s) {
+        state_ = s;
+        ticks_until_next_state_ = (s == WeatherState::Clear) ? 12000 : 6000;
+    }
 
 private:
     WeatherState state_ = WeatherState::Clear;

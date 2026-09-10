@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-06",
+  "scenario": "creative orbit r=60 around spawn, world 32x32 chunks, quality high, DisplayLink USB display (user's setup)",
+  "baseline": {
+    "fps_median": 12,
+    "fps_min": 9,
+    "frame_ms_median": 85.6,
+    "gpu_shadow_ms": 43.0,
+    "gpu_opaque_ms": 0.2,
+    "gpu_post_ms": 0.3,
+    "present_ms": 74.0
+  },
+  "after": {
+    "fps_median": 19.5,
+    "fps_min": 13,
+    "fps_steady_standing": 25,
+    "gpu_shadow_ms": 22.0,
+    "gpu_shadow_amortized_per_frame": 5.5,
+    "gpu_opaque_ms": 0.25,
+    "gpu_post_ms": 0.31,
+    "present_ms_displaylink_cap": 30.0
+  },
+  "changes": [
+    "shadow pass: AABB-vs-light-frustum culling (was: 128-block ring, most verts clipped after VS)",
+    "shadow map refresh throttled to every 4 frames (high/low) with camera-jump invalidation; light matrix kept paired with map",
+    "greedy mesh merge no longer splits on tint values (per-corner tint sampling made the gate obsolete)",
+    "GL debug context disabled (AMD slow path), async debug message delivery",
+    "shadow radius high 128->96, medium 96->80",
+    "frame instrumentation: FPS EMA + CPU/GPU breakdown in get_state (fps, frame_ms, frame_breakdown, gpu_breakdown, mesh_indices, shadow_chunks, dirty_chunks, gpu, resolution, quality, vsync)"
+  ],
+  "notes": "User's display chain goes through DisplayLink USB (~30 fps swap pacing) - hard cap outside the game. On a directly-connected display the same build now renders ~8 ms/frame (was ~70 ms)."
+}

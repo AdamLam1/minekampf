@@ -180,7 +180,7 @@ void main() {
             vec2 offset = vec2(x, y) * texel_size * 2.5;
             vec3 sample_col = texture(u_color_tex, uv + offset).rgb;
             float brightness = dot(sample_col, vec3(0.2126, 0.7152, 0.0722));
-            if (brightness > 1.2) { 
+            if (brightness > 1.35) { 
                 float weight = 1.0 / (1.0 + float(x*x + y*y));
                 bloom += sample_col * weight;
                 weight_sum += weight;
@@ -188,7 +188,7 @@ void main() {
         }
     }
     if (weight_sum > 0.0) {
-        col += (bloom / weight_sum) * 0.5;
+        col += (bloom / weight_sum) * 0.35;
     }
 
     // Apply standard distance fog or underwater fog.
@@ -219,10 +219,10 @@ void main() {
     // Tone mapping with a stronger stylized saturation lift — the voxel look
     // lives on saturated albedo against a readable sky; ACES alone desaturates
     // bright terrain into chalk.
-    col = aces_tonemap(col * 1.12);
+    col = aces_tonemap(col);
     float luminance = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col = mix(vec3(luminance), col, 1.20);
+    col = mix(vec3(luminance), col, 1.18);
     // Gentle S-curve for contrast without crushing either end.
-    col = col * col * (3.0 - 2.0 * col) * 0.35 + col * 0.65;
+    col = col * col * (3.0 - 2.0 * col) * 0.25 + col * 0.75;
     frag = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

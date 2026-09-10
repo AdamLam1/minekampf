@@ -278,6 +278,97 @@ void TextureAtlas::generate() {
         }
     }
 
+    // 4c. Cherry log + leaves: dark mahogany bark, warm pink growth rings,
+    // blossom-pink canopy (petal speckle in a rosy base).
+    {
+        int side = static_cast<int>(Tile::CherryLogSide);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, side);
+                bool groove = (py % 5 == (s % 3));
+                int v = (s % 14) - 7;
+                if (groove) {
+                    put_pixel(side, px, py, static_cast<uint8_t>(58 + v), static_cast<uint8_t>(36 + v), static_cast<uint8_t>(34 + v), 255);
+                } else {
+                    put_pixel(side, px, py, static_cast<uint8_t>(92 + v), static_cast<uint8_t>(58 + v), static_cast<uint8_t>(54 + v), 255);
+                }
+                put_height_pixel(side, px, py, groove ? 90 : 140);
+            }
+        }
+        int top = static_cast<int>(Tile::CherryLogTop);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int dx = px - 8, dy = py - 8;
+                int ring = static_cast<int>(std::sqrt(dx * dx + dy * dy)) % 3;
+                int v = (hash_shade(px, py, top) % 12) - 6;
+                put_pixel(top, px, py, static_cast<uint8_t>(198 + ring * 10 + v),
+                          static_cast<uint8_t>(140 + ring * 8 + v),
+                          static_cast<uint8_t>(120 + ring * 6 + v), 255);
+                put_height_pixel(top, px, py, static_cast<uint8_t>(150 - ring * 8));
+            }
+        }
+        int lv = static_cast<int>(Tile::CherryLeaves);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, lv) % 100;
+                // Rosy base with lighter petal speckles; NOT biome-tinted in
+                // the mesher, so the pink stays pink in every biome.
+                uint8_t r, g, b;
+                if (s < 30) {
+                    r = static_cast<uint8_t>(232 + (s % 12));
+                    g = static_cast<uint8_t>(168 + (s % 16));
+                    b = static_cast<uint8_t>(196 + (s % 10));
+                } else {
+                    r = static_cast<uint8_t>(206 + (s % 14));
+                    g = static_cast<uint8_t>(128 + (s % 18));
+                    b = static_cast<uint8_t>(158 + (s % 12));
+                }
+                put_pixel(lv, px, py, r, g, b, 255);
+            }
+        }
+    }
+
+    // 4d. Jungle log + leaves: green-mossed grey bark, pale rings, deep
+    // saturated canopy.
+    {
+        int side = static_cast<int>(Tile::JungleLogSide);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, side);
+                bool moss = (s % 7) < 2;
+                int v = (s % 16) - 8;
+                if (moss) {
+                    put_pixel(side, px, py, static_cast<uint8_t>(86 + v), static_cast<uint8_t>(112 + v), static_cast<uint8_t>(58 + v), 255);
+                } else {
+                    put_pixel(side, px, py, static_cast<uint8_t>(124 + v), static_cast<uint8_t>(104 + v), static_cast<uint8_t>(72 + v), 255);
+                }
+                put_height_pixel(side, px, py, moss ? 100 : 145);
+            }
+        }
+        int top = static_cast<int>(Tile::JungleLogTop);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int dx = px - 8, dy = py - 8;
+                int ring = static_cast<int>(std::sqrt(dx * dx + dy * dy)) % 3;
+                int v = (hash_shade(px, py, top) % 12) - 6;
+                put_pixel(top, px, py, static_cast<uint8_t>(196 + ring * 10 + v),
+                          static_cast<uint8_t>(168 + ring * 8 + v),
+                          static_cast<uint8_t>(118 + ring * 6 + v), 255);
+                put_height_pixel(top, px, py, static_cast<uint8_t>(150 - ring * 8));
+            }
+        }
+        int lv = static_cast<int>(Tile::JungleLeaves);
+        for (int py = 0; py < TILE_PX; ++py) {
+            for (int px = 0; px < TILE_PX; ++px) {
+                int s = hash_shade(px, py, lv) % 100;
+                uint8_t r = static_cast<uint8_t>(44 + (s % 14));
+                uint8_t g = static_cast<uint8_t>(118 + (s % 30));
+                uint8_t b = static_cast<uint8_t>(38 + (s % 12));
+                put_pixel(lv, px, py, r, g, b, 255);
+            }
+        }
+    }
+
     // 5. Stylized Ores — slate base with shaped crystal veins (seeded blobs
     // grown over a noise-perturbed distance field, not scatter noise).
     auto ore = [&](Tile t, RGB core, RGB highlight, uint8_t metalness) {
@@ -325,6 +416,9 @@ void TextureAtlas::generate() {
     ore(Tile::IronOre, {196, 150, 120}, {235, 200, 175}, 180);
     ore(Tile::GoldOre, {235, 190, 50}, {255, 235, 120}, 240);
     ore(Tile::DiamondOre, {45, 200, 190}, {140, 255, 245}, 230);
+    ore(Tile::CopperOre, {205, 110, 60}, {245, 165, 110}, 300);
+    ore(Tile::RedstoneOre, {190, 30, 30}, {255, 90, 80}, 340);
+    ore(Tile::LapisOre, {38, 70, 190}, {90, 130, 240}, 380);
 
     // 6. Cobblestone — rounded gray stones with dark mortar.
     {

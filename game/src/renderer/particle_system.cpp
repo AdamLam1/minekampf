@@ -107,6 +107,13 @@ void ParticleSystem::update(const World& world) {
         } else if (p.type == ParticleType::Flame) {
             p.size *= 0.96f;
         }
+        // Rain falls at constant terminal velocity — the generic drag and
+        // gravity above would bleed the speed out of the streaks.
+        if (p.type == ParticleType::RainStreak) {
+            p.velocity.x = 0.0f;
+            p.velocity.y = -0.55f;
+            p.velocity.z = 0.0f;
+        }
         
         if (p.age < p.max_age) {
             if (write_idx != i) {
@@ -144,9 +151,39 @@ void ParticleSystem::draw(const Camera& camera, TextureAtlas& atlas) {
         uint8_t g = static_cast<uint8_t>(p.g * 255.0f);
         uint8_t b = static_cast<uint8_t>(p.b * 255.0f);
         uint8_t a = static_cast<uint8_t>(p.a * 255.0f);
-        
+
         float hs = p.size * 0.5f;
-        
+
+        if (p.type == ParticleType::RainStreak) {
+            // World-vertical streak: thin along the camera-right axis, long
+            // along world up, alpha fading toward the tail (top) so drops
+            // read as motion rather than floating dots.
+            const float len = 0.55f;
+            const float wid = 0.028f;
+            glm::vec3 tail = p.pos + glm::vec3(0.0f, len, 0.0f);
+            glm::vec3 side = right * wid;
+            glm::vec3 corners[4] = {
+                p.pos - side, p.pos + side, tail + side, tail - side
+            };
+            uint8_t a_head = static_cast<uint8_t>(std::min(110.0f, p.a * 110.0f));
+            static const int streak_indices[6] = {0, 1, 2, 0, 2, 3};
+            for (int j = 0; j < 6; ++j) {
+                int i = streak_indices[j];
+                ParticleVertex v;
+                v.x = corners[i].x;
+                v.y = corners[i].y;
+                v.z = corners[i].z;
+                v.u = p.texture_u + p.texture_size * 0.5f;
+                v.v = p.texture_v + p.texture_size * 0.5f;
+                v.w = p.texture_w;
+                v.r = r; v.g = g; v.b = b;
+                v.a = (i >= 2) ? 0 : a_head; // tail fades out
+                v.size = p.size;
+                verts_.push_back(v);
+            }
+            continue;
+        }
+
         // Quad 6 vertices for 2 triangles
         int indices[6] = {0, 1, 2, 0, 2, 3};
         for (int j = 0; j < 6; ++j) {

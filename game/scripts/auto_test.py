@@ -400,14 +400,14 @@ def run_scenario(r):
     # - example_recipes.json: overrides sticks (4 -> 9) and adds shapeless
     #   sand+coal -> 2x glass. The registry the crafting UI reads must
     #   reflect the FILE, not the builtins.
-    # - quests.json: adds three quests (ids 2..4) to the catalog.
+    # - quests.json: ships 10 quests (ids 2..11) in the catalog.
     st = r.api.state()
-    r.check("mod_files_loaded", st.get("mod_files") == 2 and st.get("mod_overridden") == 1
-            and st.get("mod_added") == 1 and st.get("quests_added") == 3
+    r.check("mod_files_loaded", st.get("mod_files") == 3 and st.get("mod_overridden") == 1
+            and st.get("mod_added") == 2 and st.get("quests_added") == 10
             and st.get("quests_overridden") == 0,
             str({k: st.get(k) for k in ("mod_files", "mod_added", "mod_overridden",
                                         "quests_added", "quests_overridden")}))
-    r.check("mod_quests_loaded", "Lowca szkieletow" in st.get("quest_titles", ""),
+    r.check("mod_quests_loaded", "Łowca szkieletów" in st.get("quest_titles", ""),
             str(st.get("quest_titles", "")))
     recipes = r.api.exec("/recipes")
     r.check("mod_stick_override_live", "stickx9" in recipes.get("msg", ""),

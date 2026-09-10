@@ -19,13 +19,14 @@ void WeatherSystem::tick() {
         }
     }
 
-    // Smooth intensity interpolation
+    // Smooth intensity interpolation (~1 s to full strength so weather
+    // changes feel responsive and are testable without long waits).
     float target_intensity = (state_ == WeatherState::Clear) ? 0.0f : 1.0f;
     if (intensity_ < target_intensity) {
-        intensity_ += 0.005f;
+        intensity_ += 0.02f;
         if (intensity_ > target_intensity) intensity_ = target_intensity;
     } else if (intensity_ > target_intensity) {
-        intensity_ -= 0.005f;
+        intensity_ -= 0.02f;
         if (intensity_ < target_intensity) intensity_ = target_intensity;
     }
 }

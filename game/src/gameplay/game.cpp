@@ -221,6 +221,9 @@ bool Game::init() {
     if (!audio_->init()) {
         MC_LOG_WARN("Audio device unavailable — running without sound output.");
     }
+    if (!sfx_.init(audio_.get())) {
+        MC_LOG_WARN("Sound events unavailable — game runs silent.");
+    }
     apply_settings();
 
     GLFWwindow* w = renderer_.window();
@@ -576,6 +579,7 @@ void Game::shutdown() {
 
 void Game::apply_settings() {
     render_distance_ = settings_.render_distance;
+    renderer_.set_render_scale(settings_.render_scale);
     renderer_.set_shadows_enabled(settings_.shadows);
     renderer_.set_vsync(settings_.vsync);
     renderer_.set_fullscreen(settings_.fullscreen);
@@ -589,6 +593,21 @@ void Game::apply_settings() {
 }
 
 void Game::finish_frame() {
+    const auto now = std::chrono::steady_clock::now();
+    const float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame_start_).count();
+    last_frame_start_ = now;
+    // Smooth over ~20 frames; clamp away absurd spikes (debugger pauses etc.).
+    const float a = frame_ms > 500.0f ? 0.0f : 0.05f;
+    frame_ms_ema_ += (frame_ms - frame_ms_ema_) * a;
+    fps_ema_ += (1000.0f / std::max(frame_ms, 0.01f) - fps_ema_) * a;
+    // Rolling 1 s worst-frame tracker (jitter / smoothness metric).
+    if (frame_ms > frame_ms_max_) frame_ms_max_ = frame_ms;
+    if (++frame_count_ >= 25) {
+        frame_count_ = 0;
+        frame_ms_max_ = frame_ms;
+    }
+
+    ProfileScope present_scope(ProfileSection::PresentFrame);
     if (capture_pending_) {
         take_screenshot(capture_path_);
         capture_path_.clear();
@@ -677,9 +696,9 @@ float settings_slider(UIRenderer& ui, const char* label, float x, float y, float
 }
 
 bool settings_toggle(UIRenderer& ui, const char* label, float x, float y, float w, bool value) {
-    ui.draw_text(label, x, y + 8, 1.2f, 215, 225, 240);
+    ui.draw_text(label, x, y + 8, 1.2f, 45, 50, 65);
     float bw = 120;
-    if (ui.button(value ? "Włączone" : "Wyłączone", x + w - bw, y, bw, 28, 1.1f)) {
+    if (ui.button_dark(value ? "Włączone" : "Wyłączone", x + w - bw, y, bw, 28, 1.1f)) {
         return !value;
     }
     return value;
@@ -729,7 +748,8 @@ void Game::draw_main_menu() {
     int sh = ui_.screen_height();
     float cx = sw * 0.5f;
 
-    // Title (with soft drop shadow so it reads on any sky)
+    // Title (with soft drop shadow so it reads on any sky). Regular weight:
+    // Silkscreen Bold's 'M' reads as 'H' at logo size.
     ui_.draw_text_centered("MINEKAMPF", cx + 3.0f, sh * 0.14f + 3.0f, 5.0f, 20, 30, 50, 160);
     ui_.draw_text_centered("MINEKAMPF", cx, sh * 0.14f, 5.0f, 235, 245, 255);
     ui_.draw_text_centered("Odkrywaj  ·  Buduj  ·  Przetrwaj", cx + 2.0f, sh * 0.14f + 54.0f, 1.5f, 20, 30, 50, 150);
@@ -786,7 +806,7 @@ void Game::draw_world_select() {
     int sh = ui_.screen_height();
     float cx = sw * 0.5f;
 
-    ui_.draw_text_centered("Wybierz Świat", cx, 30, 3.0f, 200, 220, 255);
+    ui_.draw_text_centered("Wybierz Świat", cx, 30, 3.0f, 200, 220, 255, 255, true);
 
     // Refresh world list
     static double last_refresh = 0;
@@ -896,7 +916,7 @@ void Game::draw_create_world() {
     int sh = ui_.screen_height();
     float cx = sw * 0.5f;
 
-    ui_.draw_text_centered("Nowy Świat", cx, 40, 3.0f, 200, 220, 255);
+    ui_.draw_text_centered("Nowy Świat", cx, 40, 3.0f, 200, 220, 255, 255, true);
 
     float form_x = cx - 280, form_w = 560;
     float y = 110;
@@ -989,7 +1009,7 @@ void Game::draw_settings_panel() {
 
     ui_.draw_rect(0, 0, static_cast<float>(sw), static_cast<float>(sh), 0, 0, 0, 150);
     ui_.draw_glass_panel(px, py, pw, ph);
-    ui_.draw_text_centered("Opcje", sw * 0.5f, py + 16, 2.5f, 230, 240, 255);
+    ui_.draw_text_centered("Opcje", sw * 0.5f, py + 16, 2.5f, 230, 240, 255, 255, true);
 
     // Tabs
     const char* tabs[] = {"Grafika", "Gra", "Dźwięki"};
@@ -1016,11 +1036,24 @@ void Game::draw_settings_panel() {
         cy += 58;
         settings_.fov = settings_slider(ui_, "Pole widzenia (FOV)", cx, cy, cw, settings_.fov, 60.0f, 110.0f, "%.0f°");
         cy += 58;
+        {
+            char rs_label[64];
+            snprintf(rs_label, sizeof(rs_label), "Skala renderowania (%d%%)",
+                     static_cast<int>(settings_.render_scale * 100.0f + 0.5f));
+            float rs_pct = settings_slider(ui_, rs_label, cx, cy, cw,
+                                           settings_.render_scale * 100.0f, 50.0f, 100.0f, "%.0f%%");
+            float rs_new = std::clamp(rs_pct / 100.0f, 0.5f, 1.0f);
+            if (std::fabs(rs_new - settings_.render_scale) > 0.01f) {
+                settings_.render_scale = rs_new;
+                renderer_.set_render_scale(settings_.render_scale);
+            }
+        }
+        cy += 58;
         // Quality preset cycle: LOW -> MEDIUM -> HIGH -> LOW
         {
             const char* names[] = {"NISKA", "ŚREDNIA", "WYSOKA"};
             std::string label = std::string("Jakość grafiki: ") + names[settings_.quality];
-            if (ui_.button(label.c_str(), cx, cy, cw, 34, 1.3f)) {
+            if (ui_.button_dark(label.c_str(), cx, cy, cw, 34, 1.3f)) {
                 settings_.quality = (settings_.quality + 1) % 3;
                 apply_settings();
             }
@@ -1035,11 +1068,11 @@ void Game::draw_settings_panel() {
         settings_.mouse_sensitivity = settings_slider(
             ui_, "Czułość myszy", cx, cy, cw, settings_.mouse_sensitivity, 0.2f, 3.0f, "x%.2f");
         cy += 66;
-        ui_.draw_text("Sterowanie:", cx, cy, 1.3f, 160, 180, 210); cy += 24;
-        ui_.draw_text("WASD — ruch   SPACE — skok   SHIFT — skradanie", cx, cy, 1.1f, 170, 185, 205); cy += 20;
-        ui_.draw_text("CTRL — sprint   F — latanie   E — ekwipunek", cx, cy, 1.1f, 170, 185, 205); cy += 20;
-        ui_.draw_text("T — czat   F3 — debug   F2 — screenshot   ESC — menu", cx, cy, 1.1f, 170, 185, 205); cy += 20;
-        ui_.draw_text("Kółko / 1-9 — wybór slotu   LPM — kopanie   PPM — stawianie", cx, cy, 1.1f, 170, 185, 205);
+        ui_.draw_text("Sterowanie:", cx, cy, 1.3f, 45, 50, 65); cy += 24;
+        ui_.draw_text("WASD — ruch   SPACE — skok   SHIFT — skradanie", cx, cy, 1.1f, 60, 64, 80); cy += 20;
+        ui_.draw_text("CTRL — sprint   F — latanie   E — ekwipunek", cx, cy, 1.1f, 60, 64, 80); cy += 20;
+        ui_.draw_text("T — czat   F3 — debug   F2 — screenshot   ESC — menu", cx, cy, 1.1f, 60, 64, 80); cy += 20;
+        ui_.draw_text("Kółko / 1-9 — wybór slotu   LPM — kopanie   PPM — stawianie", cx, cy, 1.1f, 60, 64, 80);
     } else { // Dźwięki
         settings_.volume_master = settings_slider(ui_, "Głośność główna", cx, cy, cw, settings_.volume_master, 0.0f, 1.0f, "%.0f%%");
         cy += 58;
@@ -1123,7 +1156,7 @@ void Game::run_loading() {
             int sh = ui_.screen_height();
             float cx = sw * 0.5f;
 
-            ui_.draw_text_centered("Wczytywanie świata...", cx, sh * 0.35f, 3.0f, 200, 220, 255);
+            ui_.draw_text_centered("Wczytywanie świata...", cx, sh * 0.35f, 3.0f, 200, 220, 255, 255, true);
             ui_.draw_text_centered(current_world_meta_.display_name, cx, sh * 0.35f + 50, 2.0f, 160, 180, 200);
 
             // Progress bar
@@ -1263,7 +1296,11 @@ void Game::run_game() {
         }
 
         time_of_day_ = std::fmod(time_of_day_ + dt / 480.0f, 1.0f);
-        renderer_.set_sky_brightness(day_brightness(time_of_day_));
+        // Rain dims and GRAYS the sky/fog stack (renderer mixes toward
+        // overcast blue-grey) instead of just scaling brightness down.
+        float darkness = weather_.sky_darkening();
+        renderer_.set_sky_brightness(day_brightness(time_of_day_) * (1.0f - 0.45f * darkness));
+        renderer_.set_weather_darkness(darkness);
 
         if (screenshot_wait_ticks_ < 0) {
             build_dirty_meshes(2);
@@ -1373,7 +1410,7 @@ void Game::run_paused() {
         if (settings_open_) {
             draw_settings_panel();
         } else {
-            ui_.draw_text_centered("Gra wstrzymana", cx, sh * 0.22f, 5.0f, 220, 230, 255);
+            ui_.draw_text_centered("Gra wstrzymana", cx, sh * 0.22f, 5.0f, 220, 230, 255, 255, true);
 
             float btn_w = 280, btn_h = 44, btn_y = sh * 0.32f;
             if (ui_.button("Kontynuuj", cx - btn_w * 0.5f, btn_y, btn_w, btn_h, 2.0f)) {
@@ -1480,6 +1517,41 @@ void Game::tick() {
         tick_player(w, player_, last_input_);
         survival::tick_hunger(player_, {player_.sprinting, last_input_.jump && !last_jump_});
         last_jump_ = last_input_.jump;
+        // Environmental hazards: fall damage / drowning / lava (pure state
+        // machine in survival; game applies the damage + feedback).
+        {
+            const Vec3 eye = player_.eye_position();
+            const BlockPos eye_p(static_cast<int>(std::floor(eye.x)),
+                                 static_cast<int>(std::floor(eye.y)),
+                                 static_cast<int>(std::floor(eye.z)));
+            const BlockPos feet_p(static_cast<int>(std::floor(player_.pos.x)),
+                                  static_cast<int>(std::floor(player_.pos.y)),
+                                  static_cast<int>(std::floor(player_.pos.z)));
+            survival::EnvironmentTickInput env;
+            env.head_in_water = (w.get_block(eye_p) == BLOCK_WATER);
+            env.body_in_lava = (w.get_block(feet_p) == BLOCK_LAVA ||
+                                w.get_block({feet_p.x, feet_p.y + 1, feet_p.z}) == BLOCK_LAVA);
+            env.in_water = player_.in_water;
+            env.on_ground = player_.on_ground;
+            env.just_landed = player_.on_ground && !prev_on_ground_;
+            env.fall_speed = std::max(0.0f, -player_.velocity.y);
+            env.creative_exempt = player_.mode != GameMode::Survival &&
+                                  player_.mode != GameMode::Hardcore;
+            auto env_dmg = survival::tick_environment(player_, env);
+            prev_on_ground_ = player_.on_ground;
+            if (env_dmg.total_damage() > 0.0f) {
+                player_.health -= env_dmg.total_damage();
+                sfx_.hurt(player_.pos);
+                hurt_flash_ = 1.0f;
+                if (player_.health <= 0.0f) handle_player_death();
+            }
+            // Footsteps: one sound per ~2.2 walked blocks while grounded.
+            if (player_.on_ground && player_.walk_dist - last_step_dist_ >= 2.2f) {
+                last_step_dist_ = player_.walk_dist;
+                BlockPos below(feet_p.x, feet_p.y - 1, feet_p.z);
+                sfx_.step(w.get_block(below), player_.pos);
+            }
+        }
         // HUD feedback timers (cosmetic): hurt vignette + death overlay.
         if (player_.health < prev_health_visual_ - 0.01f) hurt_flash_ = 1.0f;
         prev_health_visual_ = player_.health;
@@ -1528,6 +1600,9 @@ void Game::tick() {
                         damage *= (1.0f - calculate_protection_reduction(m.protection_epf));
                         if (player_.mode == GameMode::Creative) damage = 999.0f;
                         m.apply_damage(damage);
+                        // Starter audio set: classic hostile families only.
+                        if (m.type == MobType::Zombie) sfx_.mob_hurt("zombie", m.pos);
+                        else if (m.type == MobType::Skeleton) sfx_.mob_hurt("skeleton", m.pos);
 
                         // Knockback away from the player
                         float kb = calculate_knockback(0.4f, 0.0f, player_.sprinting, m.knockback_resistance);
@@ -1605,6 +1680,7 @@ void Game::tick() {
         ProfileScope ps(ProfileSection::WeatherTick);
         weather_.tick();
         particles_.update(w);
+        sfx_.rain(weather_.intensity(), player_.pos);
     }
 
     // Weather particles
@@ -1625,9 +1701,15 @@ void Game::tick() {
             p.type = ParticleType::BlockDust;
             if (w.get_block({(int)pos.x, (int)pos.y, (int)pos.z}) == BLOCK_AIR) {
                 if (weather_.current_state() == WeatherState::Rain || weather_.current_state() == WeatherState::Thunder) {
-                    p.velocity = Vec3(0, -15.0f, 0);
-                    p.r = 0.2f; p.g = 0.3f; p.b = 0.8f;
-                    p.size = 0.05f;
+                    // Real streaks: world-vertical, constant fall speed, dying
+                    // on ground contact (the old blue BlockDust fell at 15
+                    // blocks/tick and read as random blue flashes).
+                    p.type = ParticleType::RainStreak;
+                    p.velocity = Vec3(0, -0.55f, 0);
+                    p.r = 0.55f; p.g = 0.66f; p.b = 0.95f;
+                    p.max_age = 50;
+                    p.collision = true;
+                    p.gravity = 0.0f;
                 }
                 particles_.spawn(p);
             }
@@ -1802,6 +1884,7 @@ void Game::tick() {
 
 void Game::render(float alpha, bool present_after) {
     ZoneScoped;
+    ProfileScope frame_scope(ProfileSection::TotalFrame);
     Vec3 interp_pos = player_.prev_pos + (player_.pos - player_.prev_pos) * alpha;
     camera_.position = Vec3(interp_pos.x, interp_pos.y + PLAYER_EYE_HEIGHT, interp_pos.z);
     camera_.yaw = player_.yaw;
@@ -1868,22 +1951,29 @@ void Game::render(float alpha, bool present_after) {
         }
         mob_list = &mob_render_list_;
     }
-    renderer_.set_shadow_casters(mob_list, static_cast<float>(glfwGetTime()));
-    renderer_.render_opaque(camera_);
-    renderer_.render_mobs(camera_, *mob_list, static_cast<float>(glfwGetTime()));
-    renderer_.draw_projectiles(camera_, projectiles_);
-
-    if (state_ == GameState::Playing) {
-        draw_selection_outline();
-    }
-
     {
+        ProfileScope opaque_scope(ProfileSection::RenderOpaque);
+        renderer_.set_shadow_casters(mob_list, static_cast<float>(glfwGetTime()));
+        renderer_.render_opaque(camera_);
+        renderer_.render_mobs(camera_, *mob_list, static_cast<float>(glfwGetTime()));
+        renderer_.draw_projectiles(camera_, projectiles_);
+
+        if (state_ == GameState::Playing) {
+            draw_selection_outline();
+        }
+
         ItemId sel = player_.inventory.get_selected_item().item;
         renderer_.set_held_block(sel < BLOCK_COUNT ? static_cast<BlockId>(sel) : BLOCK_AIR);
         renderer_.set_held_item(sel >= 256 ? sel : ITEM_AIR);
     }
-    if (settings_.particles) particles_.draw(camera_, renderer_.atlas());
-    renderer_.render_transparent(camera_);
+    if (settings_.particles) {
+        ProfileScope part_scope(ProfileSection::RenderParticles);
+        particles_.draw(camera_, renderer_.atlas());
+    }
+    {
+        ProfileScope trans_scope(ProfileSection::RenderTransparent);
+        renderer_.render_transparent(camera_);
+    }
 
     float swing = player_.prev_swing_progress + (player_.swing_progress - player_.prev_swing_progress) * alpha;
     renderer_.set_hand_swing(swing);
@@ -1908,7 +1998,7 @@ void Game::render(float alpha, bool present_after) {
 void Game::drain_gen_results() {
     // Gen results arrive pre-lit from the worker; insertion is cheap, so the
     // only real limiter is how many inserts one tick may absorb.
-    int budget = screenshot_wait_ticks_ >= 0 ? 4 : 8;
+    int budget = screenshot_wait_ticks_ >= 0 ? 4 : 5;
     GenResult res;
     while (budget > 0 && gen_channel_.try_pop(res)) {
         gen_in_flight_.erase({res.dim, res.pos});
@@ -1923,7 +2013,7 @@ void Game::drain_gen_results() {
 
     // Cap GPU uploads per call: a burst of finished chunks after a fast
     // move/teleport must not stall one frame with dozens of glBufferData.
-    int uploads = 6;
+    int uploads = 3; // spread GPU copies across frames (jitter)
     std::pair<ChunkPos, ChunkMeshData> mres;
     while (uploads > 0 && mesh_channel_.try_pop(mres)) {
         mesh_in_flight_.erase({current_dimension_, mres.first});
@@ -2001,6 +2091,7 @@ void Game::unload_distant_chunks() {
 void Game::build_dirty_meshes(int budget) {
     World& w = *worlds_[current_dimension_];
     if (w.dirty_chunks_.empty()) return; // nothing to do: skip the scan + sort
+    ProfileScope mesh_scope(ProfileSection::MeshBuilding);
 
     ChunkPos pc = chunk_from_block(BlockPos(static_cast<int>(std::floor(player_.pos.x)), 0,
                                            static_cast<int>(std::floor(player_.pos.z))));
@@ -2132,6 +2223,7 @@ void Game::handle_clicks() {
 
             if (settings_.particles && block != BLOCK_AIR && rng_.next_int(3) == 0) {
                 particles_.spawn_block_dust(target, block, renderer_.atlas());
+                sfx_.dig(block, target.to_vec());
             }
 
             if (mining_progress_ >= 1.0f) {
@@ -2157,7 +2249,11 @@ void Game::handle_clicks() {
                             player_.inventory.add_item_to_main(loot);
                         }
                         int xp = survival::xp_reward_for_block(block);
-                        if (xp > 0) survival::gain_xp(player_, xp);
+                        if (xp > 0) {
+                            int lvl0 = player_.xp_level;
+                            survival::gain_xp(player_, xp);
+                            if (player_.xp_level > lvl0) sfx_.level_up();
+                        }
                     }
                     // Breaking a furnace spills its contents (no ground items yet).
                     if (block == BLOCK_FURNACE) {
@@ -2216,6 +2312,7 @@ void Game::handle_clicks() {
             (player_.food_level < 20 || player_.health < player_.max_health)) {
             if (survival::eat_from_selected(player_) > 0) {
                 add_chat_message("Yum.");
+                sfx_.eat(player_.pos);
             }
             return;
         }
@@ -2271,6 +2368,7 @@ void Game::handle_clicks() {
         if (!bow_charging_ && held.count > 0 && held.item != ITEM_AIR && held.item < BLOCK_COUNT) {
             if (interact_place(w, player_, reach)) {
                 player_.is_swinging = true;
+                if (hit) sfx_.place(held.item, (hit->block_pos + offset(hit->face)).to_vec());
                 if (hit) {
                     BlockPos placed = hit->block_pos + offset(hit->face);
                     if (client_session_) {
@@ -2402,6 +2500,7 @@ void Game::mob_attack_player(float damage, const Vec3& source_pos) {
     }
     // No player armor slots exist yet — raw damage applies.
     player_.health -= damage;
+    sfx_.hurt(player_.pos);
 
     // Knockback away from the attacker.
     Vec3 dir = player_.pos - source_pos;
@@ -2640,13 +2739,16 @@ void Game::key_callback(GLFWwindow* w, int key, int scancode, int action, int mo
             }
         }
         if (key == GLFW_KEY_F) g->player_.flying = !g->player_.flying;
+        // F3 toggles the debug overlay exactly once per press (a second,
+        // unguarded toggle below used to cancel it — press flipped twice and
+        // the release flip depended on focus, so the overlay often never
+        // appeared).
         if (key == GLFW_KEY_F3 && action == GLFW_PRESS) g->debug_hud_ = !g->debug_hud_;
         if (key == GLFW_KEY_V) {
             g->wireframe_ = !g->wireframe_;
             g->renderer_.set_wireframe(g->wireframe_);
         }
         if (key >= GLFW_KEY_1 && key <= GLFW_KEY_9) g->player_.inventory.set_selected_hotbar_slot(key - GLFW_KEY_1);
-        if (key == GLFW_KEY_F3) g->debug_hud_ = !g->debug_hud_;
         if (key == GLFW_KEY_F2 || key == GLFW_KEY_P) {
             std::string dir = screenshot_dir();
             auto now = std::time(nullptr);
@@ -2837,6 +2939,15 @@ std::string Game::automation_state_json() const {
         o << ",\"health\":" << player_.health << ",\"food\":" << player_.food_level;
         o << ",\"flying\":" << (player_.flying ? "true" : "false");
         o << ",\"dimension\":" << static_cast<int>(current_dimension_);
+        // Current biome of the player's column (QA/automation hook).
+        {
+            BlockPos ppos(static_cast<int>(std::floor(player_.pos.x)), 0,
+                          static_cast<int>(std::floor(player_.pos.z)));
+            if (const Chunk* ch = w.get_chunk(chunk_from_block(ppos))) {
+                const Biome pb = ch->biome_at(ppos.x & 15, ppos.z & 15);
+                o << ",\"biome\":\"" << biome_info(pb).name << "\"";
+            }
+        }
         o << ",\"chunks\":" << w.loaded_count();
         o << ",\"meshes\":" << renderer_.debug_mesh_count();
         o << ",\"mobs\":" << mobs_.size();
@@ -2872,6 +2983,39 @@ std::string Game::automation_state_json() const {
         }
         o << "]";
         o << ",\"mspt\":" << mspt_ << ",\"time_of_day\":" << time_of_day_;
+    o << ",\"gpu\":\"" << renderer_.gpu_name() << "\""
+      << ",\"resolution\":\"" << renderer_.width() << "x" << renderer_.height() << "\""
+      << ",\"quality\":" << settings_.quality
+      << ",\"vsync\":" << (settings_.vsync ? 1 : 0)
+      << ",\"fps\":" << static_cast<int>(fps_ema_ + 0.5f)
+      << ",\"frame_ms\":" << frame_ms_ema_
+      << ",\"frame_ms_max\":" << frame_ms_max_;
+    {
+        // Frame-phase breakdown (microseconds, last frame) for perf tooling.
+        auto& prof = Profiler::get();
+        o << ",\"frame_breakdown\":{"
+          << "\"cull_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::FrustumCulling))
+          << ",\"opaque_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::RenderOpaque))
+          << ",\"transparent_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::RenderTransparent))
+          << ",\"sky_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::RenderSky))
+          << ",\"particles_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::RenderParticles))
+          << ",\"gui_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::RenderGUI))
+          << ",\"mesh_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::MeshBuilding))
+          << ",\"present_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::PresentFrame))
+          << ",\"total_us\":" << static_cast<long long>(prof.timing_us(ProfileSection::TotalFrame))
+          << "}"
+      << ",\"gpu_breakdown\":{"
+      << "\"shadow_ms\":" << renderer_.gpu_ms(Renderer::GpuSection::Shadow)
+      << ",\"opaque_ms\":" << renderer_.gpu_ms(Renderer::GpuSection::Opaque)
+      << ",\"sky_ms\":" << renderer_.gpu_ms(Renderer::GpuSection::Sky)
+      << ",\"transparent_ms\":" << renderer_.gpu_ms(Renderer::GpuSection::Transparent)
+      << ",\"post_ms\":" << renderer_.gpu_ms(Renderer::GpuSection::Post)
+      << "}"
+      << ",\"mesh_indices\":" << renderer_.total_mesh_indices()
+      << ",\"shadow_chunks\":" << renderer_.last_shadow_chunks()
+      << ",\"dirty_chunks\":" << (worlds_.contains(current_dimension_)
+            ? worlds_.at(current_dimension_)->dirty_chunks_.size() : 0);
+    }
     }
     o << "}";
     return o.str();
@@ -2958,9 +3102,14 @@ void Game::draw_hud() {
         char buf[128];
         float dy = 16.0f;
         float y = 10.0f;
-        ui_.draw_rect(5.0f, 5.0f, 500.0f, 8.0f * dy + 10.0f, 0, 0, 0, 110); // overlay bg
+        ui_.draw_rect(5.0f, 5.0f, 520.0f, 9.0f * dy + 10.0f, 0, 0, 0, 110); // overlay bg
         ui_.draw_text("Minekampf Debug Overlay (F3)", 10.0f, y, 1.0f, 255, 255, 255); y += dy;
         snprintf(buf, sizeof(buf), "FPS: %d | MSPT: %.2f ms", static_cast<int>(fps), mspt_);
+        ui_.draw_text(buf, 10.0f, y, 1.0f, 255, 255, 255); y += dy;
+        // Real frame pacing (EMA + worst frame in the last second).
+        auto& prof = Profiler::get();
+        snprintf(buf, sizeof(buf), "Frame: %.1f ms (max %.1f) | Tick: %.1f ms",
+                 frame_ms_ema_, frame_ms_max_, prof.timing_ms(ProfileSection::TotalTick));
         ui_.draw_text(buf, 10.0f, y, 1.0f, 255, 255, 255); y += dy;
         snprintf(buf, sizeof(buf), "Pos: %.2f, %.2f, %.2f", player_.pos.x, player_.pos.y, player_.pos.z);
         ui_.draw_text(buf, 10.0f, y, 1.0f, 255, 255, 255); y += dy;
@@ -3138,7 +3287,7 @@ void Game::draw_hud() {
             float pulse = 0.75f + 0.25f * std::sin(death_visual_ * 12.0f);
             uint8_t ta = static_cast<uint8_t>(std::min(1.0f, death_visual_ * 1.6f) * 255.0f * pulse);
             ui_.draw_rect(0, cy - 44.0f, sw, 88.0f, 0, 0, 0, static_cast<uint8_t>(ta * 0.35f));
-            ui_.draw_text_centered("Zginąłeś!", cx, cy - 34.0f, 3.0f, 235, 40, 40, ta);
+            ui_.draw_text_centered("Zginąłeś!", cx, cy - 34.0f, 3.0f, 235, 40, 40, ta, true);
             ui_.draw_text_centered("Odrodzono na punkcie startowym", cx, cy + 18.0f, 1.2f,
                                    230, 230, 230, static_cast<uint8_t>(ta * 0.8f));
         }
@@ -3842,6 +3991,32 @@ void Game::execute_command(const std::string& cmd) {
         } else {
             add_chat_message("Usage: /time <value>");
         }
+    } else if (arg == "render_scale") {
+        float rs;
+        if (ss >> rs) {
+            settings_.render_scale = std::clamp(rs, 0.5f, 1.0f);
+            renderer_.set_render_scale(settings_.render_scale);
+            settings_.save();
+            add_chat_message("Render scale: " +
+                             std::to_string(static_cast<int>(settings_.render_scale * 100.0f)) + "%");
+        } else {
+            add_chat_message("Usage: /render_scale <0.5-1.0>");
+        }
+    } else if (arg == "weather") {
+        std::string w;
+        if (ss >> w) {
+            if (w == "clear" || w == "rain" || w == "thunder") {
+                WeatherState st = (w == "clear") ? WeatherState::Clear
+                                : (w == "rain") ? WeatherState::Rain
+                                                : WeatherState::Thunder;
+                weather_.force(st);
+                add_chat_message("Weather set to " + w + " (intensity ramps in ~2 s)");
+            } else {
+                add_chat_message("Usage: /weather <clear|rain|thunder>");
+            }
+        } else {
+            add_chat_message("Usage: /weather <clear|rain|thunder>");
+        }
     } else if (arg == "give") {
         std::string item_name;
         int count = 1;
@@ -4070,6 +4245,38 @@ void Game::execute_command(const std::string& cmd) {
                 if (r == 4) add_chat_message("No valid village within 4 regions");
             }
         }
+} else if (arg == "tppyramid") {
+        StructureGenerator sg(current_world_meta_.seed);
+        auto gen_it = generators_.find(DimensionId::Overworld);
+        if (gen_it == generators_.end() || !gen_it->second) {
+            add_chat_message("No overworld generator");
+        } else {
+            int pcx = static_cast<int>(std::floor(player_.pos.x / CHUNK_SIZE)) / 32;
+            int pcz = static_cast<int>(std::floor(player_.pos.z / CHUNK_SIZE)) / 32;
+            for (int r = 0; r <= 4; ++r) {
+                bool found = false;
+                for (int dx = -r; dx <= r && !found; ++dx) {
+                    for (int dz = -r; dz <= r && !found; ++dz) {
+                        if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
+                        int vcx, vcz;
+                        if (!sg.get_pyramid_in_region(pcx + dx, pcz + dz, vcx, vcz)) continue;
+                        int vx = vcx * CHUNK_SIZE + 8;
+                        int vz = vcz * CHUNK_SIZE + 8;
+                        Biome biome;
+                        int vy = gen_it->second->terrain_height(vx, vz, biome);
+                        if (vy <= SEA_LEVEL || vy >= MAX_Y - 20) continue;
+                        player_.pos = Vec3(vx + 0.5f, static_cast<float>(vy + 2), vz + 0.5f);
+                        player_.prev_pos = player_.pos;
+                        player_.velocity = Vec3(0, 0, 0);
+                        add_chat_message("Teleported to pyramid at " + std::to_string(vx) +
+                                         " " + std::to_string(vy) + " " + std::to_string(vz));
+                        found = true;
+                    }
+                }
+                if (found) break;
+                if (r == 4) add_chat_message("No valid village within 4 regions");
+            }
+        }
     } else if (arg == "probe") {
         int x, y, z;
         if (ss >> x >> y >> z) {
@@ -4281,8 +4488,105 @@ void Game::execute_command(const std::string& cmd) {
         } else {
             add_chat_message("Usage: /place <x> <y> <z> <block>");
         }
+    } else if (arg == "gotobiome") {
+        // QA/automation hook: spiral outward over columns, sampling the
+        // WorldGenerator's biome selection (same pure function the generator
+        // stores per column), and teleport to the nearest column of the
+        // requested biome.
+        std::string want;
+        ss >> want;
+        for (char& ch : want) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        auto gen_it = generators_.find(DimensionId::Overworld);
+        if (want.empty()) {
+            add_chat_message("Usage: /gotobiome <biome>");
+        } else if (gen_it == generators_.end() || !gen_it->second) {
+            add_chat_message("No overworld generator");
+        } else {
+            const WorldGenerator& gen = *gen_it->second;
+            bool valid = false;
+            for (int i = 0; i < static_cast<int>(Biome::Count); ++i) {
+                if (biome_info(static_cast<Biome>(i)).name == want) { valid = true; break; }
+            }
+            if (!valid) {
+                std::string names;
+                for (int i = 0; i < static_cast<int>(Biome::Count); ++i) {
+                    if (i) names += " ";
+                    names += biome_info(static_cast<Biome>(i)).name;
+                }
+                add_chat_message("Unknown biome: " + want + " (valid: " + names + ")");
+            } else {
+                const int px = static_cast<int>(std::floor(player_.pos.x));
+                const int pz = static_cast<int>(std::floor(player_.pos.z));
+                bool found = false;
+                // Step 4 keeps the scan cheap; biome patches are >> 4 blocks.
+                for (int r = 0; r <= 512 && !found; r += 6) {
+                    for (int dz = -r; dz <= r && !found; dz += 4) {
+                        for (int dx = -r; dx <= r && !found; dx += 4) {
+                            if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
+                            Biome b = Biome::Plains;
+                            const int wx = px + dx;
+                            const int wz = pz + dz;
+                            const int top = gen.terrain_height(wx, wz, b);
+                            if (biome_info(b).name != want) continue;
+                            if (!in_world_bounds(ChunkPos{wx >> 4, wz >> 4})) continue;
+                            // Dry-land filter: don't teleport into a lake at
+                            // the biome edge (only the ocean search may land
+                            // below sea level).
+                            if (want != "ocean" && top <= SEA_LEVEL + 1) continue;
+                            // Walk up out of any tree canopy that happens to
+                            // stand on this column (first 2-air gap).
+                            int spawn_y = top + 2;
+                            const World& cw = *worlds_[DimensionId::Overworld];
+                            for (int yy = top + 2; yy < top + 24 && yy < MAX_Y - 2; ++yy) {
+                                Chunk* cc = cw.get_chunk(ChunkPos{wx >> 4, wz >> 4});
+                                if (!cc) break;
+                                BlockId fb = cc->get_block(wx & 15, yy, wz & 15);
+                                BlockId hb = cc->get_block(wx & 15, yy + 1, wz & 15);
+                                if (fb == BLOCK_AIR && hb == BLOCK_AIR) {
+                                    spawn_y = yy;
+                                    break;
+                                }
+                            }
+                            player_.pos = Vec3(static_cast<float>(wx) + 0.5f,
+                                               static_cast<float>(spawn_y),
+                                               static_cast<float>(wz) + 0.5f);
+                            player_.prev_pos = player_.pos;
+                            player_.velocity = Vec3(0, 0, 0);
+                            add_chat_message("Teleported to " + want + " at " +
+                                             std::to_string(wx) + " " +
+                                             std::to_string(top + 1) + " " +
+                                             std::to_string(wz));
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    // Diagnostic: frequency of each biome in the scanned area,
+                    // so threshold tuning doesn't happen blind.
+                    std::unordered_map<int, int> freq;
+                    int total = 0;
+                    for (int dz = -256; dz <= 256; dz += 12) {
+                        for (int dx = -256; dx <= 256; dx += 12) {
+                            Biome b = Biome::Plains;
+                            gen.terrain_height(px + dx, pz + dz, b);
+                            ++freq[static_cast<int>(b)];
+                            ++total;
+                        }
+                    }
+                    std::string near;
+                    for (int i = 0; i < static_cast<int>(Biome::Count); ++i) {
+                        auto it = freq.find(i);
+                        if (it == freq.end() || it->second == 0) continue;
+                        if (!near.empty()) near += " ";
+                        near += biome_info(static_cast<Biome>(i)).name;
+                        near += "=" + std::to_string(it->second * 100 / total) + "%";
+                    }
+                    add_chat_message("No " + want + " within 512 blocks. Nearby: " + near);
+                }
+            }
+        }
     } else if (arg == "help") {
-        add_chat_message("Commands: /tp /time /give /gamemode /setblock /goto /fly /sethome /home /kill /spawnmob /fillfurnace /aimnearest /shoot /select /probe /tpdungeon /quest /tpvillage /killmobs /recipes /quality /mp_host /mp_players /mp_leave /say /mine /place");
+        add_chat_message("Commands: /tp /time /give /gamemode /setblock /goto /fly /sethome /home /kill /spawnmob /fillfurnace /aimnearest /shoot /select /probe /tpdungeon /quest /tpvillage /tppyramid /render_scale /killmobs /recipes /quality /gotobiome /mp_host /mp_players /mp_leave /say /mine /place");
     } else if (arg == "quality") {
         std::string preset;
         if (ss >> preset) {
@@ -4301,7 +4605,7 @@ void Game::execute_command(const std::string& cmd) {
         } else {
             const char* q = renderer_.quality() == Renderer::QualityPreset::Low ? "low"
                           : renderer_.quality() == Renderer::QualityPreset::Medium ? "medium" : "high";
-            add_chat_message(std::string("Quality preset: ") + q + " (usage: /quality low|medium|high)");
+            add_chat_message(std::string("Quality preset: ") + q + " (usage: /weather <clear|rain|thunder>, /quality low|medium|high)");
         }
     } else {
         add_chat_message("Unknown command: " + arg);
@@ -4681,7 +4985,7 @@ void Game::draw_multiplayer_menu() {
     int sh = ui_.screen_height();
     float cx = sw * 0.5f;
 
-    ui_.draw_text_centered("Multiplayer", cx, 40, 3.0f, 200, 220, 255);
+    ui_.draw_text_centered("Multiplayer", cx, 40, 3.0f, 200, 220, 255, 255, true);
 
     float btn_w = 320, btn_h = 44, btn_y = sh * 0.34f;
     if (ui_.button("Hostuj świat", cx - btn_w * 0.5f, btn_y, btn_w, btn_h, 1.6f)) {
@@ -4742,7 +5046,7 @@ void Game::draw_multiplayer_connect() {
     int sh = ui_.screen_height();
     float cx = sw * 0.5f;
 
-    ui_.draw_text_centered("Dołącz do gry", cx, 40, 3.0f, 200, 220, 255);
+    ui_.draw_text_centered("Dołącz do gry", cx, 40, 3.0f, 200, 220, 255, 255, true);
 
     float form_w = 420, form_x = cx - form_w * 0.5f;
     float y = sh * 0.30f;

@@ -17,6 +17,10 @@ constexpr std::array<BiomeInfo, static_cast<size_t>(Biome::Count)> BIOMES = {{
     {"taiga",     0.25f,0.8f,  0.3f, 0.0f, BLOCK_GRASS,   BLOCK_DIRT,    BLOCK_STONE,    BLOCK_DIRT,  12},
     {"snowy",     0.0f, 0.5f,  0.3f, 0.0f, BLOCK_SNOW,    BLOCK_DIRT,    BLOCK_STONE,    BLOCK_DIRT,  16},
     {"mountains", 0.2f, 0.5f,  0.5f, 0.8f, BLOCK_STONE,   BLOCK_STONE,   BLOCK_STONE,    BLOCK_STONE, 0},
+    {"swamp",     1.0f, 0.85f, 0.05f, 0.0f, BLOCK_GRASS,   BLOCK_DIRT,    BLOCK_STONE,    BLOCK_DIRT,  30},
+    {"jungle",    1.3f, 0.9f,  0.35f, 0.0f, BLOCK_GRASS,   BLOCK_DIRT,    BLOCK_STONE,    BLOCK_DIRT,  6},
+    {"cherry",    1.0f, 0.48f, 0.30f, 0.0f, BLOCK_GRASS,   BLOCK_DIRT,    BLOCK_STONE,    BLOCK_DIRT,  18},
+    {"flower_forest", 0.8f, 0.8f, 0.30f, 0.0f, BLOCK_GRASS, BLOCK_DIRT,   BLOCK_STONE,    BLOCK_DIRT,  10},
 }};
 // clang-format on
 } // namespace
@@ -32,6 +36,10 @@ constexpr std::array<BiomeTint, static_cast<size_t>(Biome::Count)> TINTS = {{
     {0.80f, 0.92f, 0.90f}, // taiga (cold bluish green)
     {0.75f, 0.85f, 1.00f}, // snowy (frosty pale green)
     {0.85f, 0.90f, 0.80f}, // mountains (faded alpine)
+    {0.72f, 0.82f, 0.58f}, // swamp (murky olive)
+    {0.80f, 1.00f, 0.70f}, // jungle (lush vivid green)
+    {1.00f, 0.95f, 0.92f}, // cherry (warm neutral, pink comes from the tile)
+    {0.86f, 1.00f, 0.86f}, // flower forest (bright meadow green)
 }};
 // clang-format on
 
@@ -62,7 +70,18 @@ Biome select_biome(float temperature, float humidity, float continentalness, flo
     if (temperature > 1.35f) return Biome::Desert;
     if (temperature > 1.1f && humidity < 0.45f) return Biome::Savanna;
 
-    if (humidity > 0.58f) return Biome::Forest;
+        // Warm and wet but low-lying: swamp (before jungle so the warm-wet
+    // lowlands stay swampy, not tropical). Continentalness rarely exceeds
+    // 0.35 in this noise field, so "inland" starts at 0.2.
+    if (temperature >= 0.85f && temperature < 1.15f && humidity > 0.62f && continentalness < 0.2f) return Biome::Swamp;
+    // Hot and wet: jungle (savanna above already took the hot-dry band).
+    if (temperature > 1.05f && humidity >= 0.55f) return Biome::Jungle;
+    // Narrow temperate band that used to be plains: cherry groves.
+    if (temperature >= 0.92f && temperature < 1.08f && humidity >= 0.44f && humidity < 0.54f) return Biome::CherryGrove;
+    // Wet warm inland: flowering forests (swamp took the lowlands). Kept
+    // distinct from the forest band below so forests stay common.
+    if (temperature >= 0.85f && temperature < 1.15f && humidity > 0.60f && continentalness >= 0.1f) return Biome::FlowerForest;
+    if (humidity > 0.52f) return Biome::Forest;
     return Biome::Plains;
 }
 

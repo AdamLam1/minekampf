@@ -57,8 +57,18 @@ TEST(BiomeSelectionTest, SelectsExpectedBiomes) {
     EXPECT_EQ(select_biome(0.8f, 0.5f, 0.3f, 0.0f), Biome::Taiga);
     EXPECT_EQ(select_biome(1.6f, 0.1f, 0.3f, 0.0f), Biome::Desert);
     EXPECT_EQ(select_biome(1.2f, 0.3f, 0.3f, 0.0f), Biome::Savanna);
-    EXPECT_EQ(select_biome(1.0f, 0.8f, 0.3f, 0.0f), Biome::Forest);
-    EXPECT_EQ(select_biome(1.0f, 0.4f, 0.3f, 0.0f), Biome::Plains);
+    // Warm + very wet + LOWLAND (cont < 0.2) -> swamp.
+    EXPECT_EQ(select_biome(1.0f, 0.8f, 0.1f, 0.0f), Biome::Swamp);
+    // Same climate inland (cont >= 0.2) -> flower forest.
+    EXPECT_EQ(select_biome(1.0f, 0.8f, 0.3f, 0.0f), Biome::FlowerForest);
+    // Narrow temperate dry band -> cherry grove (was plains).
+    EXPECT_EQ(select_biome(1.0f, 0.48f, 0.3f, 0.0f), Biome::CherryGrove);
+    // Hot + wet -> jungle; hot bands stay desert/savanna (asserted above).
+    EXPECT_EQ(select_biome(1.3f, 0.9f, 0.3f, 0.0f), Biome::Jungle);
+    // Mid-wet warm temperate stays forest.
+    EXPECT_EQ(select_biome(0.9f, 0.56f, 0.3f, 0.0f), Biome::Forest);
+    // Dry warm temperate outside the cherry band stays plains.
+    EXPECT_EQ(select_biome(0.9f, 0.35f, 0.3f, 0.0f), Biome::Plains);
 }
 
 TEST(BiomeTintTest, TintsAreValidAndDistinct) {

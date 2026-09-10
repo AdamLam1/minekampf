@@ -20,13 +20,17 @@ struct UiVertex {
 };
 
 // Immediate-mode UI renderer. Renders quads (backgrounds, buttons) and text
-// using a procedurally-generated bitmap font (96-char ASCII, 8x16 px).
-// All drawing happens in screen-space pixel coordinates (origin top-left).
+// using the embedded bitmap font (96-char ASCII, 8x16 px) or, when available,
+// a ladder of Silkscreen TTF rasters (see ui.cpp). Text is UTF-8 (ASCII +
+// Polish diacritics). All drawing happens in screen-space pixel coordinates
+// (origin top-left).
 class UIRenderer {
 public:
     static constexpr int FONT_W = 8;
     static constexpr int FONT_H = 8;
     static constexpr int FONT_CHARS = 96; // space..DEL
+    // Texture tag meaning "solid rect — bind whatever the current run binds".
+    static constexpr uint8_t kTagSolid = 255;
 
     bool init(int screen_w, int screen_h);
     void shutdown();
@@ -39,8 +43,9 @@ public:
     void draw_rect(float x, float y, float w, float h, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
     void draw_glass_panel(float x, float y, float w, float h);
     void draw_hotbar_bg(float x, float y, float w, float h);
-    void draw_text(std::string_view text, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
-    void draw_text_centered(std::string_view text, float cx, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
+    // `bold` selects the Bold.ttf ladder (menus/titles); falls back to regular.
+    void draw_text(std::string_view text, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255, bool bold = false);
+    void draw_text_centered(std::string_view text, float cx, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255, bool bold = false);
 
     // -- Icon atlas path --
     // The game binds its ItemIcons texture each frame; icon quads are batched
@@ -53,6 +58,8 @@ public:
     // -- Immediate-mode widgets. Returns true on click/press this frame.
     bool button(std::string_view label, float x, float y, float w, float h);
     bool button(std::string_view label, float x, float y, float w, float h, float font_scale);
+    // Button with a dark label — for buttons sitting on light panels.
+    bool button_dark(std::string_view label, float x, float y, float w, float h, float font_scale);
 
     // TextInput: returns true if text changed. `buffer` is in/out.
     struct TextInputResult {
@@ -94,8 +101,8 @@ public:
 private:
     void gen_font_texture();
     void push_quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1,
-                   uint8_t r, uint8_t g, uint8_t b, uint8_t a);
-    void push_text_char(int codepoint, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+                   uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t tag = kTagSolid);
+    void push_text_char(int codepoint, float x, float y, float scale, uint8_t r, uint8_t g, uint8_t b, uint8_t a, bool bold = false);
     void flush();
     void flush_icons();
 
@@ -104,6 +111,11 @@ private:
     uint32_t vao_ = 0;
     uint32_t vbo_ = 0;
     std::vector<UiVertex> verts_;
+    // One tag per quad in verts_: kTagSolid (wildcard) or a frame-texture
+    // index into frame_tex_ (0 = bitmap font, then one entry per TTF raster
+    // used this frame). flush() coalesces runs with equal tags in order.
+    std::vector<uint8_t> quad_tag_;
+    std::vector<uint32_t> frame_tex_;
     std::vector<UiVertex> icon_verts_;
     uint32_t icon_tex_ = 0;
     int screen_w_ = 1280;

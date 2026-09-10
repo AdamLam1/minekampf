@@ -56,4 +56,32 @@ int spend_xp_levels(Player& p, int levels);
 // 0 if held item isn't food. Consumes the item on success.
 int eat_from_selected(Player& p);
 
+// ---------------------------------------------------------------------------
+// Environmental hazards: fall damage, drowning, lava. Pure state machine —
+// the game feeds per-tick world context, then applies result.total_damage()
+// through the player damage path (feedback + death handling) itself.
+struct EnvironmentTickInput {
+    bool head_in_water = false;
+    bool body_in_lava = false;
+    bool in_water = false;      // any body part in water (resets fall tracking)
+    bool on_ground = false;
+    bool just_landed = false;   // became grounded this tick
+    float fall_speed = 0.0f;    // downward speed this tick (positive = falling)
+    bool creative_exempt = false;
+};
+
+struct EnvironmentTickResult {
+    float fall_damage = 0.0f;   // applied on the landing tick
+    float drown_damage = 0.0f;
+    float lava_damage = 0.0f;
+    [[nodiscard]] float total_damage() const {
+        return fall_damage + drown_damage + lava_damage;
+    }
+};
+
+// One hazard state-machine step (call once per game tick). Damage cadence:
+// vanilla fall formula (1 HP per block beyond 3), 1 HP/s drowning after 15 s
+// of air, 2 HP/s while in lava. Creative/spectator players only reset timers.
+EnvironmentTickResult tick_environment(Player& p, const EnvironmentTickInput& in);
+
 } // namespace mc::survival

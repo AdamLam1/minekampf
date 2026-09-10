@@ -18,6 +18,7 @@ add_executable(minekampf_tests
     test_region.cpp
     test_mining.cpp
     test_survival.cpp
+    test_environment.cpp
     test_durability.cpp
     test_mob_rig.cpp
     test_smelting.cpp

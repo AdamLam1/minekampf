@@ -62,6 +62,11 @@ struct Player {
     // Hunger timers (PHASE13 §3.2, implemented in survival.hpp)
     int food_regen_timer = 0;
     int starve_timer = 0;
+    // Environment hazards (fall/breath/lava, ticked by survival::tick_environment)
+    float fall_distance = 0.0f; // blocks fallen since last grounded/water
+    int breath = 300;           // ticks of air left (15 s), refilled out of water
+    int drown_timer = 0;        // ticks since last drowning damage
+    int lava_timer = 0;         // ticks since last lava burn tick
 
     // Active quest bookkeeping (quest.hpp state machine, saved in player.dat)
     quest::Progress quest;
